@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 }
 
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -59,7 +60,9 @@ try {
         $stmt->execute([$course_id, $name, $code, $desc]);
 
         http_response_code(201);
-        echo json_encode(['success' => true, 'message' => 'Subject added', 'subject_id' => $pdo->lastInsertId()]);
+        $subjectId = (int)$pdo->lastInsertId();
+        auditFromSession($pdo, 'SUBJECT', 'CREATE_SUBJECT', "Subject {$name} created (ID {$subjectId})", 'SUCCESS', 'subject', $subjectId);
+        echo json_encode(['success' => true, 'message' => 'Subject added', 'subject_id' => $subjectId]);
         exit;
     }
 
@@ -80,6 +83,7 @@ try {
         $stmt->execute([$name, $code, $desc, $subject_id]);
 
         http_response_code(200);
+        auditFromSession($pdo, 'SUBJECT', 'UPDATE_SUBJECT', "Subject ID {$subject_id} updated", 'SUCCESS', 'subject', (int)$subject_id);
         echo json_encode(['success' => true, 'message' => 'Subject updated']);
         exit;
     }
@@ -98,6 +102,7 @@ try {
         $stmt->execute([$subject_id]);
 
         http_response_code(200);
+        auditFromSession($pdo, 'SUBJECT', 'DELETE_SUBJECT', "Subject ID {$subject_id} deleted", 'SUCCESS', 'subject', (int)$subject_id);
         echo json_encode(['success' => true, 'message' => 'Subject deleted']);
         exit;
     }

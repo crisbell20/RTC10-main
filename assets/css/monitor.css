@@ -1,0 +1,69 @@
+/* CCMD Live Monitor */
+
+.monitor-page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.monitor-controls {
+    min-width: 280px;
+}
+
+.monitor-table .progress {
+    height: 8px;
+    min-width: 80px;
+}
+
+.status-pill {
+    display: inline-block;
+    padding: 0.3rem 0.55rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.status-pill.in-progress {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.status-pill.completed {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.status-pill.not-started {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.violation-badge {
+    font-weight: 700;
+}
+
+.violation-badge.has-violations {
+    color: var(--danger-color);
+}
+
+.violation-badge.clean {
+    color: var(--success-color);
+}
+
+.row-flagged {
+    background-color: #fef2f2 !important;
+}
+
+@media (max-width: 768px) {
+    .monitor-page-header {
+        flex-direction: column;
+    }
+
+    .monitor-controls {
+        width: 100%;
+    }
+}

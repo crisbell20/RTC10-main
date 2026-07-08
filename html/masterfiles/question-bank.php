@@ -118,18 +118,30 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     </div>
                 </div>
                 <div class="section-body">
-                    <div class="d-flex flex-wrap gap-2 mb-3 align-items-end">
+                    <div class="d-flex flex-wrap gap-2 mb-2 align-items-end">
+                        <div>
+                            <label class="form-label small mb-1" for="filterCourse">Course</label>
+                            <select id="filterCourse" class="form-select form-select-sm" style="min-width: 200px;">
+                                <option value="">All courses</option>
+                            </select>
+                        </div>
                         <div>
                             <label class="form-label small mb-1" for="filterSubject">Subject</label>
                             <select id="filterSubject" class="form-select form-select-sm" style="min-width: 200px;">
                                 <option value="">All subjects</option>
                             </select>
                         </div>
-                        <div class="ms-auto">
+                        <div>
                             <label class="form-label small mb-1" for="searchQuestion">Search</label>
-                            <input id="searchQuestion" type="text" class="form-control form-control-sm" placeholder="Search questions...">
+                            <input id="searchQuestion" type="text" class="form-control form-control-sm" style="min-width: 220px;" placeholder="Search question, subject, course...">
+                        </div>
+                        <div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="clearFiltersBtn" style="display: none;">
+                                <i class="bi bi-x-circle"></i> Clear filters
+                            </button>
                         </div>
                     </div>
+                    <p class="text-muted small mb-3" id="questionsFilterSummary">Loading questions...</p>
                     <div id="questionsContainer">
                         <div class="text-center text-muted py-4">
                             <i class="bi bi-hourglass-split"></i> Loading...
@@ -155,8 +167,8 @@ $userName = $_SESSION['user_name'] ?? 'User';
                         <ul class="mb-0 mt-2">
                             <li>File must be Excel (.xlsx, .xls) or CSV (.csv)</li>
                             <li>First row should contain headers</li>
-                            <li>Required columns: <code>Subject</code>, <code>Question</code>, <code>Option_A</code>, <code>Option_B</code>, <code>Option_C</code>, <code>Option_D</code>, <code>Correct_Answer</code>, <code>Points</code></li>
-                            <li>Correct_Answer should be A, B, C, or D</li>
+                            <li>Required columns: <code>Subject</code>, <code>Question</code>, <code>Option_A</code>, <code>Option_B</code>, <code>Option_C</code>, <code>Option_D</code>, <code>Option_E</code>, <code>Correct_Answer</code>, <code>Points</code></li>
+                            <li>Correct_Answer should be A, B, C, D, or E</li>
                             <li>Subject must match existing subjects in the system (case-sensitive)</li>
                         </ul>
                     </div>
@@ -216,11 +228,19 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <form id="questionForm">
                     <input type="hidden" id="questionId" name="question_id">
                     <div class="modal-body">
-                        <div class="mb-3">
-                            <label class="form-label">Subject *</label>
-                            <select id="questionSubject" class="form-select" required>
-                                <option value="">Select subject...</option>
-                            </select>
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Course *</label>
+                                <select id="questionCourse" class="form-select" required>
+                                    <option value="">Select course...</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Subject *</label>
+                                <select id="questionSubject" class="form-select" required disabled>
+                                    <option value="">Select course first...</option>
+                                </select>
+                            </div>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Question Text *</label>
@@ -253,6 +273,12 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                     </span>
                                     <input type="text" class="form-control" placeholder="Option D" data-answer-index="3" required>
                                 </div>
+                                <div class="input-group mb-2">
+                                    <span class="input-group-text">
+                                        <input type="radio" name="correctAnswer" value="4" required>
+                                    </span>
+                                    <input type="text" class="form-control" placeholder="Option E" data-answer-index="4" required>
+                                </div>
                             </div>
                             <small class="text-muted">Select the radio button for the correct answer</small>
                         </div>
@@ -276,6 +302,32 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="../../assets/js/auto-logout.js"></script>
     <script>
+        const CHOICE_COUNT = 5;
+        let allCourses = [];
+        let allSubjects = [];
+
+        function renderAnswerOptions(existingAnswers = []) {
+            const answersList = document.getElementById('answersList');
+            answersList.innerHTML = '';
+
+            for (let i = 0; i < CHOICE_COUNT; i++) {
+                const label = String.fromCharCode(65 + i);
+                const existing = existingAnswers[i] || null;
+                const answerDiv = document.createElement('div');
+                answerDiv.className = 'input-group mb-2';
+                const isCorrect = existing && String(existing.Is_Correct) === '1';
+                const noCorrectMarked = !existingAnswers.some(a => String(a.Is_Correct) === '1');
+                answerDiv.innerHTML = `
+                    <span class="input-group-text">
+                        <input type="radio" name="correctAnswer" value="${i}" ${isCorrect || (noCorrectMarked && i === 0) ? 'checked' : ''} required>
+                    </span>
+                    <span class="input-group-text fw-bold">${label}</span>
+                    <input type="text" class="form-control" placeholder="Option ${label}" data-answer-index="${i}" value="${existing ? escapeHtml(existing.Choice_Text) : ''}" required>
+                `;
+                answersList.appendChild(answerDiv);
+            }
+        }
+
         // Logout handler
         document.getElementById('logoutBtn').addEventListener('click', function(e) {
             e.preventDefault();
@@ -301,23 +353,92 @@ $userName = $_SESSION['user_name'] ?? 'User';
             });
         });
 
-        // Load subjects for filter
-        function loadSubjects() {
-            axios.get('../../api/masterfiles/subjects.php?action=list')
+        function getCourseName(courseId) {
+            const course = allCourses.find(c => String(c.Course_ID) === String(courseId));
+            return course ? course.Course_Name : '';
+        }
+
+        function populateSubjectOptions(selectEl, courseId, placeholder, selectedId) {
+            if (!selectEl) return;
+            const defaultLabel = placeholder || 'All subjects';
+            selectEl.innerHTML = `<option value="">${defaultLabel}</option>`;
+
+            const list = courseId
+                ? allSubjects.filter(s => String(s.Course_ID) === String(courseId))
+                : allSubjects;
+
+            list.forEach(subject => {
+                const option = new Option(
+                    `${subject.Subject_Name}${subject.Subject_Code ? ' (' + subject.Subject_Code + ')' : ''}`,
+                    subject.Subject_ID
+                );
+                selectEl.add(option);
+            });
+
+            if (selectedId) {
+                selectEl.value = selectedId;
+            }
+        }
+
+        function hasActiveFilters() {
+            return !!(document.getElementById('filterCourse').value
+                || document.getElementById('filterSubject').value
+                || document.getElementById('searchQuestion').value.trim());
+        }
+
+        function updateFilterSummary(count) {
+            const summary = document.getElementById('questionsFilterSummary');
+            const clearBtn = document.getElementById('clearFiltersBtn');
+            const courseId = document.getElementById('filterCourse').value;
+            const subjectId = document.getElementById('filterSubject').value;
+            const parts = [`Showing ${count} question${count === 1 ? '' : 's'}`];
+
+            if (courseId) {
+                parts.push(getCourseName(courseId));
+            }
+            if (subjectId) {
+                const subject = allSubjects.find(s => String(s.Subject_ID) === String(subjectId));
+                if (subject) parts.push(subject.Subject_Name);
+            }
+
+            summary.textContent = parts.join(' • ');
+            clearBtn.style.display = hasActiveFilters() ? 'inline-block' : 'none';
+        }
+
+        function clearFilters() {
+            document.getElementById('filterCourse').value = '';
+            document.getElementById('filterSubject').value = '';
+            document.getElementById('searchQuestion').value = '';
+            populateSubjectOptions(document.getElementById('filterSubject'), '', 'All subjects');
+            loadQuestions();
+        }
+
+        function loadCourses() {
+            return axios.get('../../api/masterfiles/courses.php?action=list')
                 .then(response => {
                     if (response.data.success) {
-                        const filterSelect = document.getElementById('filterSubject');
-                        const modalSelect = document.getElementById('questionSubject');
-                        
-                        filterSelect.innerHTML = '<option value="">All subjects</option>';
-                        modalSelect.innerHTML = '<option value="">Select subject...</option>';
-                        
-                        response.data.data.forEach(subject => {
-                            const option1 = new Option(subject.Subject_Name, subject.Subject_ID);
-                            const option2 = new Option(subject.Subject_Name, subject.Subject_ID);
-                            filterSelect.add(option1);
-                            modalSelect.add(option2);
+                        allCourses = response.data.data || [];
+                        const filterSelect = document.getElementById('filterCourse');
+                        const modalCourseSelect = document.getElementById('questionCourse');
+
+                        filterSelect.innerHTML = '<option value="">All courses</option>';
+                        modalCourseSelect.innerHTML = '<option value="">Select course...</option>';
+
+                        allCourses.forEach(course => {
+                            filterSelect.add(new Option(course.Course_Name, course.Course_ID));
+                            modalCourseSelect.add(new Option(course.Course_Name, course.Course_ID));
                         });
+                    }
+                })
+                .catch(error => console.error('Error loading courses:', error));
+        }
+
+        function loadSubjectsData() {
+            return axios.get('../../api/masterfiles/subjects.php?action=list')
+                .then(response => {
+                    if (response.data.success) {
+                        allSubjects = response.data.data || [];
+                        populateSubjectOptions(document.getElementById('filterSubject'), '', 'All subjects');
                     }
                 })
                 .catch(error => console.error('Error loading subjects:', error));
@@ -325,25 +446,37 @@ $userName = $_SESSION['user_name'] ?? 'User';
 
         // Load questions
         function loadQuestions() {
+            const courseFilter = document.getElementById('filterCourse').value;
             const subjectFilter = document.getElementById('filterSubject').value;
-            const searchTerm = document.getElementById('searchQuestion').value;
+            const searchTerm = document.getElementById('searchQuestion').value.trim();
 
             let url = '../../api/masterfiles/exam.php?action=get_questions';
-            if (subjectFilter) url += `&subject_id=${subjectFilter}`;
+            if (courseFilter) url += `&course_id=${encodeURIComponent(courseFilter)}`;
+            if (subjectFilter) url += `&subject_id=${encodeURIComponent(subjectFilter)}`;
             if (searchTerm) url += `&search=${encodeURIComponent(searchTerm)}`;
 
             axios.get(url)
                 .then(response => {
                     const container = document.getElementById('questionsContainer');
-                    
-                    if (response.data.success && response.data.questions.length > 0) {
-                        container.innerHTML = response.data.questions.map(q => `
+                    const questions = response.data.success ? (response.data.questions || []) : [];
+
+                    updateFilterSummary(questions.length);
+
+                    if (questions.length > 0) {
+                        container.innerHTML = questions.map(q => {
+                            const usageCount = parseInt(q.exam_usage_count, 10) || 0;
+                            const usageBadge = usageCount > 0
+                                ? `<span class="badge bg-warning text-dark ms-1">Used in ${usageCount} exam${usageCount === 1 ? '' : 's'}</span>`
+                                : '<span class="badge bg-light text-muted border ms-1">Not used</span>';
+
+                            return `
                             <div class="question-card">
                                 <div class="d-flex justify-content-between align-items-start mb-2">
                                     <div class="flex-grow-1">
-                                        <span class="badge bg-secondary me-2">${q.Subject_Name || 'N/A'}</span>
+                                        <span class="badge bg-dark me-1">${escapeHtml(q.Course_Name || 'N/A')}</span>
+                                        <span class="badge bg-secondary me-2">${escapeHtml(q.Subject_Name || 'N/A')}</span>
                                         <span class="badge bg-primary">Multiple Choice</span>
-                                        <span class="badge bg-info ms-2">${q.Points || 1} pts</span>
+                                        ${usageBadge}
                                     </div>
                                     <div>
                                         <button class="btn btn-sm btn-outline" onclick="editQuestion(${q.Question_ID})">
@@ -364,14 +497,15 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                     `).join('') : '<small class="text-muted">No answers available</small>'}
                                 </div>
                             </div>
-                        `).join('');
+                        `;
+                        }).join('');
                     } else {
                         container.innerHTML = '<div class="text-center text-muted py-4">No questions found</div>';
                     }
                 })
                 .catch(error => {
                     console.error('Error loading questions:', error);
-                    document.getElementById('questionsContainer').innerHTML = 
+                    document.getElementById('questionsContainer').innerHTML =
                         '<div class="text-center text-danger py-4">Error loading questions</div>';
                 });
         }
@@ -396,18 +530,30 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 answers: []
             };
 
-            // Collect answers
+            // Collect answers (all 5 required)
             const answerInputs = document.querySelectorAll('#answersList input[type="text"]');
-            const correctAnswerIndex = parseInt(document.querySelector('input[name="correctAnswer"]:checked')?.value || 0);
-            
+            const correctAnswerIndex = parseInt(document.querySelector('input[name="correctAnswer"]:checked')?.value ?? '0', 10);
+
+            if (answerInputs.length !== CHOICE_COUNT) {
+                Swal.fire('Error', `Exactly ${CHOICE_COUNT} answer options are required`, 'error');
+                return;
+            }
+
             answerInputs.forEach((input, index) => {
-                if (input.value.trim()) {
-                    formData.answers.push({
-                        answer_text: input.value.trim(),
-                        is_correct: index === correctAnswerIndex
-                    });
+                const text = input.value.trim();
+                if (!text) {
+                    return;
                 }
+                formData.answers.push({
+                    answer_text: text,
+                    is_correct: index === correctAnswerIndex
+                });
             });
+
+            if (formData.answers.length !== CHOICE_COUNT) {
+                Swal.fire('Error', `Please fill in all ${CHOICE_COUNT} answer options (A through E)`, 'error');
+                return;
+            }
 
             const url = questionId ? 
                 `../../api/masterfiles/exam.php?action=update_question&question_id=${questionId}` :
@@ -444,40 +590,21 @@ $userName = $_SESSION['user_name'] ?? 'User';
 
                         // Populate the form
                         document.getElementById('questionId').value = question.Question_ID;
-                        document.getElementById('questionSubject').value = question.Subject_ID;
+                        const subject = allSubjects.find(s => String(s.Subject_ID) === String(question.Subject_ID));
+                        const courseId = subject ? subject.Course_ID : '';
+                        document.getElementById('questionCourse').value = courseId || '';
+                        const modalSubject = document.getElementById('questionSubject');
+                        modalSubject.disabled = !courseId;
+                        populateSubjectOptions(modalSubject, courseId, 'Select subject...', question.Subject_ID);
                         document.getElementById('questionText').value = question.Question_Text;
                         document.getElementById('questionPoints').value = question.Points || 1;
 
-                        // Populate answers
-                        const answersList = document.getElementById('answersList');
-                        answersList.innerHTML = '';
-                        
-                        if (question.answers && question.answers.length > 0) {
-                            question.answers.forEach((answer, index) => {
-                                const answerId = String.fromCharCode(65 + index); // A, B, C, D
-                                const answerDiv = document.createElement('div');
-                                answerDiv.className = 'mb-2 d-flex align-items-center gap-2';
-                                answerDiv.innerHTML = `
-                                    <input type="radio" name="correctAnswer" value="${index}" ${answer.Is_Correct ? 'checked' : ''} required>
-                                    <span class="fw-bold">${answerId}.</span>
-                                    <input type="text" class="form-control" value="${escapeHtml(answer.Choice_Text)}" required>
-                                `;
-                                answersList.appendChild(answerDiv);
-                            });
-                        } else {
-                            // Default 4 options if no answers
-                            for (let i = 0; i < 4; i++) {
-                                const answerId = String.fromCharCode(65 + i);
-                                const answerDiv = document.createElement('div');
-                                answerDiv.className = 'mb-2 d-flex align-items-center gap-2';
-                                answerDiv.innerHTML = `
-                                    <input type="radio" name="correctAnswer" value="${i}" ${i === 0 ? 'checked' : ''} required>
-                                    <span class="fw-bold">${answerId}.</span>
-                                    <input type="text" class="form-control" required>
-                                `;
-                                answersList.appendChild(answerDiv);
-                            }
+                        // Populate answers (pad to 5 choices)
+                        const paddedAnswers = [...(question.answers || [])];
+                        while (paddedAnswers.length < CHOICE_COUNT) {
+                            paddedAnswers.push({ Choice_Text: '', Is_Correct: 0 });
                         }
+                        renderAnswerOptions(paddedAnswers.slice(0, CHOICE_COUNT));
 
                         // Update modal title and button
                         document.getElementById('questionModalLabel').textContent = 'Edit Question';
@@ -523,8 +650,28 @@ $userName = $_SESSION['user_name'] ?? 'User';
         }
 
         // Filter handlers
+        document.getElementById('filterCourse').addEventListener('change', function() {
+            const courseId = this.value;
+            const subjectSelect = document.getElementById('filterSubject');
+            subjectSelect.value = '';
+            populateSubjectOptions(subjectSelect, courseId, 'All subjects');
+            loadQuestions();
+        });
         document.getElementById('filterSubject').addEventListener('change', loadQuestions);
         document.getElementById('searchQuestion').addEventListener('input', debounce(loadQuestions, 500));
+        document.getElementById('clearFiltersBtn').addEventListener('click', clearFilters);
+
+        document.getElementById('questionCourse').addEventListener('change', function() {
+            const courseId = this.value;
+            const modalSubject = document.getElementById('questionSubject');
+            if (!courseId) {
+                modalSubject.disabled = true;
+                modalSubject.innerHTML = '<option value="">Select course first...</option>';
+                return;
+            }
+            modalSubject.disabled = false;
+            populateSubjectOptions(modalSubject, courseId, 'Select subject...');
+        });
 
         // Debounce function
         function debounce(func, wait) {
@@ -540,8 +687,14 @@ $userName = $_SESSION['user_name'] ?? 'User';
         }
 
         // Initialize
-        loadSubjects();
-        loadQuestions();
+        Promise.all([loadCourses(), loadSubjectsData()])
+            .then(() => loadQuestions())
+            .catch(error => {
+                console.error('Error initializing question bank:', error);
+                document.getElementById('questionsContainer').innerHTML =
+                    '<div class="text-center text-danger py-4">Failed to load question bank. Please refresh the page.</div>';
+                document.getElementById('questionsFilterSummary').textContent = 'Error loading filters';
+            });
 
         // Reset modal when opening for add (not edit)
         document.getElementById('addQuestionModal').addEventListener('show.bs.modal', function(e) {
@@ -551,21 +704,10 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 document.getElementById('questionId').value = '';
                 document.getElementById('questionModalLabel').textContent = 'Add New Question';
                 document.getElementById('questionSubmitBtn').textContent = 'Add Question';
+                document.getElementById('questionSubject').disabled = true;
+                document.getElementById('questionSubject').innerHTML = '<option value="">Select course first...</option>';
                 
-                // Reset to default 4 answer options
-                const answersList = document.getElementById('answersList');
-                answersList.innerHTML = '';
-                for (let i = 0; i < 4; i++) {
-                    const answerId = String.fromCharCode(65 + i);
-                    const answerDiv = document.createElement('div');
-                    answerDiv.className = 'mb-2 d-flex align-items-center gap-2';
-                    answerDiv.innerHTML = `
-                        <input type="radio" name="correctAnswer" value="${i}" ${i === 0 ? 'checked' : ''} required>
-                        <span class="fw-bold">${answerId}.</span>
-                        <input type="text" class="form-control" required>
-                    `;
-                    answersList.appendChild(answerDiv);
-                }
+                renderAnswerOptions();
             }
         });
 
@@ -613,7 +755,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     }
 
                     // Validate required columns
-                    const requiredColumns = ['Subject', 'Question', 'Option_A', 'Option_B', 'Option_C', 'Option_D', 'Correct_Answer', 'Points'];
+                    const requiredColumns = ['Subject', 'Question', 'Option_A', 'Option_B', 'Option_C', 'Option_D', 'Option_E', 'Correct_Answer', 'Points'];
                     const firstRow = jsonData[0];
                     const missingColumns = requiredColumns.filter(col => !(col in firstRow));
                     
@@ -697,7 +839,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                 <p><strong>✅ Imported:</strong> ${response.data.imported || 0} questions</p>
                                 ${response.data.failed ? `<p><strong>❌ Failed:</strong> ${response.data.failed} questions</p>` : ''}
                                 ${errorDetails}
-                                ${response.data.failed > 0 ? '<div class="alert alert-info mt-3"><strong>💡 Common Issues:</strong><ul class="mb-0 mt-2"><li>Subject name must match exactly (case-sensitive)</li><li>All required columns must be present</li><li>At least 2 answer options required per question</li><li>Correct_Answer must be A, B, C, or D</li></ul></div>' : ''}
+                                ${response.data.failed > 0 ? '<div class="alert alert-info mt-3"><strong>💡 Common Issues:</strong><ul class="mb-0 mt-2"><li>Subject name must match exactly (case-sensitive)</li><li>All required columns must be present</li><li>All 5 answer options (A–E) required per question</li><li>Correct_Answer must be A, B, C, D, or E</li></ul></div>' : ''}
                             </div>
                         `,
                         icon: response.data.failed > 0 ? 'warning' : 'success',
@@ -738,6 +880,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     Option_B: '4',
                     Option_C: '5',
                     Option_D: '6',
+                    Option_E: '7',
                     Correct_Answer: 'B',
                     Points: 1
                 },
@@ -748,6 +891,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     Option_B: 'CO2',
                     Option_C: 'O2',
                     Option_D: 'N2',
+                    Option_E: 'NaCl',
                     Correct_Answer: 'A',
                     Points: 1
                 }

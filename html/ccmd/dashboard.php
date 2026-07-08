@@ -65,10 +65,10 @@ $userName = $_SESSION['user_name'] ?? 'User';
             <ul class="sidebar-menu">
                 <li><a href="dashboard.php" class="active"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
                 <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
-                <li><a href="#"><i class="bi bi-activity"></i>Monitor Examination</a></li>
+                <li><a href="monitor-examination.php"><i class="bi bi-activity"></i>Monitor Examination</a></li>
                 <li><a href="../ccmd/exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
                 <li><a href="#"><i class="bi bi-people-fill"></i>Enrolled Trainees</a></li>
-                <li><a href="#"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
+                <li><a href="monitor-examination.php#incidents"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
                 <li><a href="reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
                 <li><a href=""><i class="bi bi-clock-history"></i>Audit Logs</a></li>
             </ul>

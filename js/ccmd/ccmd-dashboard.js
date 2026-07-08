@@ -129,8 +129,11 @@ function getStatusBadge(status) {
 
 function getActionStatusBadge(status) {
     switch(status) {
-        case 'Pending': return 'bg-warning';
+        case 'Open': return 'bg-warning text-dark';
+        case 'Pending': return 'bg-warning text-dark';
         case 'Reviewed': return 'bg-info';
+        case 'Dismissed': return 'bg-secondary';
+        case 'Escalated': return 'bg-danger';
         case 'Resolved': return 'bg-success';
         default: return 'bg-secondary';
     }
@@ -143,12 +146,7 @@ function formatDateTime(dateTime) {
 }
 
 function viewExamDetails(examId) {
-    // TODO: Implement exam monitoring details view
-    Swal.fire({
-        title: 'Exam Monitoring',
-        text: 'Detailed monitoring view coming soon',
-        icon: 'info'
-    });
+    window.location.href = `monitor-examination.php?exam_id=${examId}`;
 }
 
 // Auto-refresh every 30 seconds

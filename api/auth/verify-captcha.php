@@ -2,6 +2,9 @@
 session_start();
 header('Content-Type: application/json');
 
+require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
+
 $request_method = $_SERVER['REQUEST_METHOD'];
 
 if ($request_method !== 'POST') {
@@ -24,6 +27,17 @@ try {
     $_SESSION['user_name'] = $_SESSION['captcha_name'];
     $_SESSION['user_email'] = $_SESSION['captcha_email'];
     $_SESSION['must_change_password'] = $_SESSION['captcha_must_change_password'] ?? 0;
+
+    writeAuditLog($pdo, [
+        'user_id' => (int)$_SESSION['user_id'],
+        'user_role' => $_SESSION['user_role'] ?? null,
+        'module' => 'AUTH',
+        'action' => 'LOGIN',
+        'outcome' => 'Admin/CCMD login completed after CAPTCHA verification',
+        'status' => 'SUCCESS',
+        'entity_type' => 'user',
+        'entity_id' => (int)$_SESSION['user_id'],
+    ]);
     
     // Clear CAPTCHA session
     unset($_SESSION['captcha_user_id']);

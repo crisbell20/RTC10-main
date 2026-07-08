@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 }
 
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -54,6 +55,8 @@ try {
         }
 
         $pdo->commit();
+
+        auditFromSession($pdo, 'EXAM', 'ASSIGN_EXAM_BATCH', count($batch_ids) . " batches assigned to exam {$exam_id}", 'SUCCESS', 'exam', (int)$exam_id);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Batches assigned successfully', 'count' => count($batch_ids)]);

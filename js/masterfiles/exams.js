@@ -55,6 +55,7 @@ function loadCoursesAndSubjects() {
                         examCourse.appendChild(opt2);
                     }
                 });
+                populateQuestionCourseFilter();
             }
         })
         .catch(err => console.error('Error loading courses:', err));
@@ -653,20 +654,59 @@ async function reopenExam(examId) {
     }
 }
 
-// Load all questions from question bank
-function loadQuestions() {
-    return axios.get(`${QUESTION_BANK_API}?action=list`)
+// Load questions from question bank (optional server-side filters)
+function loadQuestions(filters = {}) {
+    let url = `${QUESTION_BANK_API}?action=list`;
+    if (filters.course_id) url += `&course_id=${encodeURIComponent(filters.course_id)}`;
+    if (filters.subject_id) url += `&subject_id=${encodeURIComponent(filters.subject_id)}`;
+    if (filters.search) url += `&search=${encodeURIComponent(filters.search)}`;
+
+    return axios.get(url)
         .then(res => {
             if (res.data.success) {
                 allQuestions = res.data.questions || [];
                 return allQuestions;
             }
+            allQuestions = [];
             return [];
         })
         .catch(err => {
             console.error('Error loading questions:', err);
+            allQuestions = [];
             return [];
         });
+}
+
+function getQuestionPickerFilters() {
+    return {
+        course_id: document.getElementById('questionCourseFilter')?.value || '',
+        subject_id: document.getElementById('questionSubjectFilter')?.value || '',
+        search: document.getElementById('questionSearchInput')?.value.trim() || ''
+    };
+}
+
+function updateQuestionPickerSummary(count) {
+    const summary = document.getElementById('questionPickerSummary');
+    if (!summary) return;
+    const filters = getQuestionPickerFilters();
+    const parts = [`${count} question${count === 1 ? '' : 's'} available`];
+    if (filters.course_id) {
+        const course = courses.find(c => String(c.Course_ID) === String(filters.course_id));
+        if (course) parts.push(course.Course_Name);
+    }
+    if (filters.subject_id) {
+        const subject = Object.values(subjectsByCourse).flat()
+            .find(s => String(s.Subject_ID) === String(filters.subject_id));
+        if (subject) parts.push(subject.Subject_Name);
+    }
+    summary.textContent = parts.join(' • ');
+}
+
+function reloadQuestionPickerList() {
+    return loadQuestions(getQuestionPickerFilters()).then(questions => {
+        updateQuestionPickerSummary(questions.length);
+        renderQuestionList(questions);
+    });
 }
 
 // Load all batches
@@ -695,23 +735,24 @@ function renderQuestionList(questions) {
         return;
     }
 
-    // Group questions by subject
+    // Group questions by course + subject
     const grouped = {};
     questions.forEach(q => {
-        const subjectName = q.Subject_Name || 'Unknown Subject';
-        if (!grouped[subjectName]) {
-            grouped[subjectName] = [];
+        const groupKey = `${q.Course_Name || 'Unknown Course'} → ${q.Subject_Name || 'Unknown Subject'}`;
+        if (!grouped[groupKey]) {
+            grouped[groupKey] = [];
         }
-        grouped[subjectName].push(q);
+        grouped[groupKey].push(q);
     });
 
     let html = '';
-    Object.keys(grouped).sort().forEach(subjectName => {
+    Object.keys(grouped).sort().forEach(groupKey => {
         html += `<div class="mb-3">
-            <h6 class="text-primary mb-2">${escapeHtml(subjectName)}</h6>`;
+            <h6 class="text-primary mb-2">${escapeHtml(groupKey)}</h6>`;
         
-        grouped[subjectName].forEach(q => {
+        grouped[groupKey].forEach(q => {
             const isChecked = selectedQuestionIds.includes(q.Question_ID);
+            const usageCount = parseInt(q.exam_usage_count, 10) || 0;
             html += `
                 <div class="form-check mb-2">
                     <input class="form-check-input question-checkbox" type="checkbox" 
@@ -719,6 +760,7 @@ function renderQuestionList(questions) {
                            ${isChecked ? 'checked' : ''}>
                     <label class="form-check-label" for="q_${q.Question_ID}">
                         ${escapeHtml(q.Question_Text)}
+                        ${usageCount > 0 ? `<small class="text-muted"> (used in ${usageCount} exam${usageCount === 1 ? '' : 's'})</small>` : ''}
                     </label>
                 </div>`;
         });
@@ -730,7 +772,17 @@ function renderQuestionList(questions) {
 
     // Add event listeners to checkboxes
     document.querySelectorAll('.question-checkbox').forEach(cb => {
-        cb.addEventListener('change', updateQuestionSelectionCount);
+        cb.addEventListener('change', function() {
+            const id = parseInt(this.value, 10);
+            if (this.checked) {
+                if (!selectedQuestionIds.includes(id)) {
+                    selectedQuestionIds.push(id);
+                }
+            } else {
+                selectedQuestionIds = selectedQuestionIds.filter(qId => qId !== id);
+            }
+            updateQuestionSelectionCount();
+        });
     });
 
     updateQuestionSelectionCount();
@@ -742,44 +794,47 @@ function updateQuestionSelectionCount() {
     const count = checkboxes.length;
     const countDisplay = document.getElementById('selectedQuestionCount');
     if (countDisplay) {
-        countDisplay.textContent = count;
+        countDisplay.textContent = `${count} selected`;
     }
 }
 
-// Filter questions by subject
-function filterQuestionsBySubject(subjectId) {
-    if (!subjectId) {
-        renderQuestionList(allQuestions);
-        return;
-    }
-    const filtered = allQuestions.filter(q => String(q.Subject_ID) === String(subjectId));
-    renderQuestionList(filtered);
+// Filter questions in picker modal (server-side reload)
+function filterQuestionsBySubject() {
+    reloadQuestionPickerList();
 }
 
-// Search questions by text
-function searchQuestions(searchText) {
-    if (!searchText) {
-        const subjectFilter = document.getElementById('questionSubjectFilter');
-        if (subjectFilter && subjectFilter.value) {
-            filterQuestionsBySubject(subjectFilter.value);
-        } else {
-            renderQuestionList(allQuestions);
-        }
-        return;
-    }
+function searchQuestions() {
+    reloadQuestionPickerList();
+}
 
-    const searchLower = searchText.toLowerCase();
-    let filtered = allQuestions.filter(q => 
-        q.Question_Text && q.Question_Text.toLowerCase().includes(searchLower)
-    );
+function populateQuestionCourseFilter() {
+    const filter = document.getElementById('questionCourseFilter');
+    if (!filter) return;
 
-    // Also apply subject filter if active
-    const subjectFilter = document.getElementById('questionSubjectFilter');
-    if (subjectFilter && subjectFilter.value) {
-        filtered = filtered.filter(q => String(q.Subject_ID) === String(subjectFilter.value));
-    }
+    filter.innerHTML = '<option value="">All Courses</option>';
+    courses.forEach(course => {
+        const opt = document.createElement('option');
+        opt.value = course.Course_ID;
+        opt.textContent = course.Course_Name;
+        filter.appendChild(opt);
+    });
+}
 
-    renderQuestionList(filtered);
+function populateQuestionSubjectFilter(courseId) {
+    const filter = document.getElementById('questionSubjectFilter');
+    if (!filter) return;
+
+    filter.innerHTML = '<option value="">All Subjects</option>';
+    const list = courseId
+        ? (subjectsByCourse[courseId] || [])
+        : Object.values(subjectsByCourse).flat();
+
+    list.forEach(subject => {
+        const opt = document.createElement('option');
+        opt.value = subject.Subject_ID;
+        opt.textContent = `${subject.Subject_Name} (${subject.Subject_Code})`;
+        filter.appendChild(opt);
+    });
 }
 
 // Render batch checkboxes
@@ -1177,53 +1232,49 @@ document.getElementById('examModal').addEventListener('show.bs.modal', function 
     renderBatchSelection();
 });
 
-// Manage Questions button handler
 document.getElementById('manageQuestionsBtn').addEventListener('click', function() {
-    // Load questions if not already loaded
-    if (allQuestions.length === 0) {
-        loadQuestions().then(() => {
-            populateQuestionSubjectFilter();
-            renderQuestionList(allQuestions);
-            new bootstrap.Modal(document.getElementById('questionSelectionModal')).show();
-        });
-    } else {
-        renderQuestionList(allQuestions);
+    const courseFilter = document.getElementById('questionCourseFilter');
+    const subjectFilter = document.getElementById('questionSubjectFilter');
+    const searchInput = document.getElementById('questionSearchInput');
+    if (courseFilter) courseFilter.value = '';
+    if (subjectFilter) subjectFilter.value = '';
+    if (searchInput) searchInput.value = '';
+    populateQuestionSubjectFilter('');
+
+    reloadQuestionPickerList().then(() => {
         new bootstrap.Modal(document.getElementById('questionSelectionModal')).show();
-    }
+    });
 });
 
-// Populate subject filter in question selection modal
-function populateQuestionSubjectFilter() {
-    const filter = document.getElementById('questionSubjectFilter');
-    if (!filter) return;
-    
-    filter.innerHTML = '<option value="">All Subjects</option>';
-    
-    // Get unique subjects from questions
-    const subjects = {};
-    allQuestions.forEach(q => {
-        if (q.Subject_ID && q.Subject_Name) {
-            subjects[q.Subject_ID] = q.Subject_Name;
-        }
-    });
-    
-    Object.keys(subjects).sort((a, b) => subjects[a].localeCompare(subjects[b])).forEach(subjectId => {
-        const opt = document.createElement('option');
-        opt.value = subjectId;
-        opt.textContent = subjects[subjectId];
-        filter.appendChild(opt);
-    });
-}
+// Question course filter change handler
+document.getElementById('questionCourseFilter')?.addEventListener('change', function() {
+    populateQuestionSubjectFilter(this.value || '');
+    const subjectFilter = document.getElementById('questionSubjectFilter');
+    if (subjectFilter) subjectFilter.value = '';
+    reloadQuestionPickerList();
+});
 
 // Question subject filter change handler
-document.getElementById('questionSubjectFilter').addEventListener('change', function() {
-    filterQuestionsBySubject(this.value);
+document.getElementById('questionSubjectFilter')?.addEventListener('change', function() {
+    reloadQuestionPickerList();
 });
 
 // Question search input handler
-document.getElementById('questionSearchInput').addEventListener('input', function() {
-    searchQuestions(this.value);
-});
+document.getElementById('questionSearchInput')?.addEventListener('input', debounce(function() {
+    reloadQuestionPickerList();
+}, 400));
+
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func.apply(this, args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
 
 // Save Question Selection button handler
 document.getElementById('saveQuestionSelectionBtn').addEventListener('click', function() {

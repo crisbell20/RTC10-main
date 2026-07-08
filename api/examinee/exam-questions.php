@@ -135,11 +135,28 @@ try {
         }
         // If Is_Randomized = 0, questions are already ordered by Question_Order (Requirement 9.3)
 
-        // Get choices for each question
-        foreach ($questions as &$question) {
-            $stmt = $pdo->prepare('SELECT Choice_ID, Choice_Text, Is_Correct FROM tbl_choice WHERE Question_ID = ? ORDER BY Choice_ID');
-            $stmt->execute([$question['Question_ID']]);
-            $question['answers'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($questions)) {
+            $questionIds = array_column($questions, 'Question_ID');
+            $placeholders = implode(',', array_fill(0, count($questionIds), '?'));
+            $choiceStmt = $pdo->prepare("
+                SELECT Question_ID, Choice_ID, Choice_Text, Is_Correct
+                FROM tbl_choice
+                WHERE Question_ID IN ({$placeholders})
+                ORDER BY Question_ID ASC, Choice_ID ASC
+            ");
+            $choiceStmt->execute($questionIds);
+
+            $choicesByQuestion = [];
+            foreach ($choiceStmt->fetchAll(PDO::FETCH_ASSOC) as $choice) {
+                $qid = (int)$choice['Question_ID'];
+                unset($choice['Question_ID']);
+                $choicesByQuestion[$qid][] = $choice;
+            }
+
+            foreach ($questions as &$question) {
+                $question['answers'] = $choicesByQuestion[(int)$question['Question_ID']] ?? [];
+            }
+            unset($question);
         }
 
         sendSuccess([

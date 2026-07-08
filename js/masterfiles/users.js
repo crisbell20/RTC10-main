@@ -1,11 +1,47 @@
 const API_BASE = '../../api/masterfiles/users.php';
 let addUserModal = new bootstrap.Modal(document.getElementById('addUserModal'));
+let personnelRankOptions = [];
 
 // Keep a copy of all users for filtering
 let allUsers = [];
 let currentRoleFilter = 'All';
 let currentStatusFilter = 'All';
 let currentSearch = '';
+
+// Load personnel rank options
+function loadPersonnelRanks() {
+    return axios.get(`${API_BASE}?action=personnel_ranks`)
+        .then(response => {
+            if (response.data.success) {
+                personnelRankOptions = response.data.data || [];
+                populatePersonnelRankSelect();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading personnel ranks:', error);
+        });
+}
+
+function populatePersonnelRankSelect(selectedValue) {
+    const select = document.getElementById('personnel_rank');
+    if (!select) return;
+
+    const current = selectedValue !== undefined ? selectedValue : select.value;
+    select.innerHTML = '<option value="">— None —</option>';
+    personnelRankOptions.forEach(rank => {
+        const option = document.createElement('option');
+        option.value = rank;
+        option.textContent = rank;
+        select.appendChild(option);
+    });
+    if (current && !personnelRankOptions.includes(current)) {
+        const custom = document.createElement('option');
+        custom.value = current;
+        custom.textContent = current;
+        select.appendChild(custom);
+    }
+    select.value = current || '';
+}
 
 // Load users data on page load
 function loadUsers() {
@@ -50,7 +86,7 @@ function loadRoles() {
 function renderUsersTable(users) {
     const tbody = document.getElementById('usersTableBody');
     if (users.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No users found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No users found</td></tr>';
         return;
     }
 
@@ -60,6 +96,10 @@ function renderUsersTable(users) {
             : user.Role_Name === 'Examinee' 
                 ? '<small class="text-muted">Not assigned</small>'
                 : '<small class="text-muted">—</small>';
+
+        const rankDisplay = user.Personnel_Rank
+            ? escapeHtml(user.Personnel_Rank)
+            : '<small class="text-muted">—</small>';
         
         return `
         <tr>
@@ -67,6 +107,7 @@ function renderUsersTable(users) {
             <td>${escapeHtml(user.Email)}</td>
             <td>${escapeHtml(user.Username)}</td>
             <td>${user.Academic_Number ? escapeHtml(user.Academic_Number) : ''}</td>
+            <td>${rankDisplay}</td>
             <td><span class="badge badge-info">${escapeHtml(user.Role_Name)}</span></td>
             <td>${batchInfo}</td>
             <td>
@@ -214,6 +255,7 @@ document.getElementById('addUserForm').addEventListener('submit', function(e) {
         email: formData.get('email'),
         username: formData.get('username'),
         academic_number: formData.get('academic_number'),
+        personnel_rank: formData.get('personnel_rank'),
         role_id: formData.get('role_id')
     };
 
@@ -267,6 +309,7 @@ document.getElementById('addUserForm').addEventListener('submit', function(e) {
 // Reload roles when modal is shown
 document.getElementById('addUserModal').addEventListener('show.bs.modal', function() {
     loadRoles();
+    loadPersonnelRanks();
     // Reset password field to editable/empty by default
     const passwordInput = document.getElementById('password');
     const passwordOptionalLabel = document.getElementById('passwordOptionalLabel');
@@ -294,6 +337,7 @@ document.getElementById('addUserModal').addEventListener('show.bs.modal', functi
     
     // Hide batch enrollment section when adding new user
     hideBatchEnrollmentSection();
+    populatePersonnelRankSelect('');
 });
 
 // Add to Batch button handler
@@ -441,9 +485,11 @@ function editUser(userId) {
     if (emailInput) emailInput.value = user.Email || '';
     if (usernameInput) usernameInput.value = user.Username || '';
     if (academicInput) academicInput.value = user.Academic_Number || '';
+    populatePersonnelRankSelect(user.Personnel_Rank || '');
 
     // Select the correct role once roles are loaded
     loadRoles();
+    loadPersonnelRanks();
     setTimeout(() => {
         if (roleSelect) {
             for (let i = 0; i < roleSelect.options.length; i++) {
@@ -697,6 +743,7 @@ document.getElementById('logoutBtn').addEventListener('click', function(e) {
 
 // Initialize on page load
 loadRoles();
+loadPersonnelRanks();
 loadUsers();
 
 // Real-time validation for fullname

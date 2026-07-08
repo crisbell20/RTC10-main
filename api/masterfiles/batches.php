@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 }
 
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -508,6 +509,10 @@ try {
             exit;
         }
 
+        if (!empty($result['assigned'])) {
+            auditFromSession($pdo, 'BATCH', 'ASSIGN_USER_BATCH', "User {$user_id} assigned to batch {$batch_id}", 'SUCCESS', 'batch', (int)$batch_id);
+        }
+
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => $result['message']]);
         exit;
@@ -629,6 +634,8 @@ try {
 
         $stmt = $pdo->prepare('DELETE FROM tbl_user_batch WHERE Batch_ID = ? AND User_ID = ?');
         $stmt->execute([$batch_id, $user_id]);
+
+        auditFromSession($pdo, 'BATCH', 'REMOVE_USER_BATCH', "User {$user_id} removed from batch {$batch_id}", 'SUCCESS', 'batch', (int)$batch_id);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'User removed from batch successfully']);

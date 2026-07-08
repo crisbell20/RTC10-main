@@ -264,6 +264,7 @@ async function handleTakeExam(examId, buttonEl) {
                         <li>The timer will start immediately</li>
                         <li>Duration: <strong>${duration}</strong></li>
                         <li>${deadline}</li>
+                        <li><strong>Fullscreen mode</strong> will be required — tab switching is monitored</li>
                     </ul>
                 </div>
             </div>
@@ -317,15 +318,8 @@ async function handleTakeExam(examId, buttonEl) {
         const response = await axios.post(START_EXAM_API, payload);
         
         if (response.data.success) {
-            Swal.fire({
-                title: 'Success',
-                text: 'Timer has started. Good luck!',
-                icon: 'success',
-                timer: 2000,
-                showConfirmButton: false
-            }).then(() => {
-                window.location.href = `../student masterfiles/exam.php?session_id=${response.data.data.session_id}`;
-            });
+            Swal.close();
+            window.location.href = `../student masterfiles/exam.php?session_id=${response.data.data.session_id}`;
         } else {
             Swal.fire({
                 title: 'Error',

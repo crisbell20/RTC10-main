@@ -160,7 +160,7 @@ if (!$examId) {
 
                 <div id="rankingsPanel">
                     <div class="d-flex flex-wrap gap-2 mb-3">
-                        <input type="search" id="searchInput" class="form-control form-control-sm" style="max-width: 260px;" placeholder="Search by name or ID...">
+                        <input type="search" id="searchInput" class="form-control form-control-sm" style="max-width: 260px;" placeholder="Search name, ID, or rank...">
                         <select id="statusFilter" class="form-select form-select-sm" style="max-width: 160px;">
                             <option value="all">All results</option>
                             <option value="passed">Passed only</option>
@@ -171,15 +171,15 @@ if (!$examId) {
                         <table class="table table-hover align-middle">
                             <thead class="table-light">
                                 <tr>
-                                    <th style="width:70px;">Rank</th>
-                                    <th>Examinee</th>
-                                    <th>Batch</th>
+                                    <th>Personnel Rank</th>
+                                    <th>Name</th>
                                     <th>Score</th>
-                                    <th>%</th>
-                                    <th>Status</th>
+                                    <th>Grade (%)</th>
+                                    <th style="width:80px;">Standing</th>
+                                    <th>Remarks</th>
                                     <th>Time</th>
                                     <th>Submitted</th>
-                                    <th style="width:100px;"></th>
+                                    <th style="width:90px;"></th>
                                 </tr>
                             </thead>
                             <tbody id="rankingsBody"></tbody>
@@ -238,6 +238,6 @@ if (!$examId) {
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../js/masterfiles/exam-responses.js?v=1"></script>
+    <script src="../../js/masterfiles/exam-responses.js?v=4"></script>
 </body>
 </html>

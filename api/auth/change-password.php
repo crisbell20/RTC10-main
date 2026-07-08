@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
 
 $input = json_decode(file_get_contents('php://input'), true) ?? [];
 
@@ -67,6 +68,8 @@ try {
     $update->execute([$newHash, $user['User_ID']]);
 
     $_SESSION['must_change_password'] = 0;
+
+    auditFromSession($pdo, 'AUTH', 'PASSWORD_CHANGE', 'User changed password', 'SUCCESS', 'user', (int)$user['User_ID']);
 
     http_response_code(200);
     echo json_encode(['success' => true, 'message' => 'Password updated successfully']);

@@ -23,6 +23,7 @@ if (!in_array($_SESSION['user_role'] ?? '', ['Admin', 'CCMD'])) {
 }
 
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -210,11 +211,14 @@ try {
         $stmt = $pdo->prepare('INSERT INTO tbl_course (User_ID, Course_Name, Details, Duration) VALUES (?, ?, ?, ?)');
         $stmt->execute([$user_id, $course_name, $details, $duration]);
 
+        $courseId = (int)$pdo->lastInsertId();
+        auditFromSession($pdo, 'COURSE', 'CREATE_COURSE', "Course {$course_name} created (ID {$courseId})", 'SUCCESS', 'course', $courseId);
+
         http_response_code(201);
         echo json_encode([
             'success' => true,
             'message' => 'Course added successfully',
-            'course_id' => $pdo->lastInsertId()
+            'course_id' => $courseId
         ]);
         exit;
     }
@@ -237,6 +241,8 @@ try {
 
         $stmt = $pdo->prepare('UPDATE tbl_course SET Course_Name = ?, Details = ?, Duration = ? WHERE Course_ID = ?');
         $stmt->execute([$course_name, $details, $duration, $course_id]);
+
+        auditFromSession($pdo, 'COURSE', 'UPDATE_COURSE', "Course {$course_name} updated (ID {$course_id})", 'SUCCESS', 'course', (int)$course_id);
 
         http_response_code(200);
         echo json_encode([
@@ -261,6 +267,8 @@ try {
 
         $stmt = $pdo->prepare('DELETE FROM tbl_course WHERE Course_ID = ?');
         $stmt->execute([$course_id]);
+
+        auditFromSession($pdo, 'COURSE', 'DELETE_COURSE', "Course ID {$course_id} deleted", 'SUCCESS', 'course', (int)$course_id);
 
         http_response_code(200);
         echo json_encode([

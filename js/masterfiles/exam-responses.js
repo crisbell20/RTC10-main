@@ -79,9 +79,11 @@ async function loadRankings() {
 
 function renderSummary(data) {
     const exam = data.exam || {};
+    const passingScore = data.passing_score ?? exam.Passing_Score ?? 50;
+
     document.getElementById('examTitle').textContent = exam.Title || 'Exam Responses';
     document.getElementById('examMeta').textContent =
-        `${exam.Course_Name || ''} • ${exam.Subject_Name || ''} • ${exam.question_count || 0} questions • ${exam.Passing_Score || 0}% passing`;
+        `${exam.Course_Name || ''} • ${exam.Subject_Name || ''} • ${exam.question_count || 0} items • Passing: ${formatScore(passingScore)}%`;
 
     document.getElementById('rankingsCount').textContent = data.finished_count || 0;
     document.getElementById('notSubmittedCount').textContent = data.not_submitted_count || 0;
@@ -95,8 +97,8 @@ function renderSummary(data) {
         </div>
         <div class="col-6 col-md-3">
             <div class="stat-chip">
-                <h4>${data.avg_percentage || 0}%</h4>
-                <p>Average Score</p>
+                <h4>${data.avg_grade || 0}%</h4>
+                <p>Average Grade</p>
             </div>
         </div>
         <div class="col-6 col-md-3">
@@ -107,8 +109,8 @@ function renderSummary(data) {
         </div>
         <div class="col-6 col-md-3">
             <div class="stat-chip">
-                <h4>${data.highest_percentage ?? '—'}${data.highest_percentage != null ? '%' : ''}</h4>
-                <p>Highest Score</p>
+                <h4>${data.highest_grade ?? '—'}${data.highest_grade != null ? '%' : ''}</h4>
+                <p>Highest Grade</p>
             </div>
         </div>
     `;
@@ -126,22 +128,23 @@ function renderRankings(rows) {
 
     empty.style.display = 'none';
     tbody.innerHTML = rows.map(row => {
-        const rankHtml = renderRankBadge(row.rank);
-        const statusBadge = row.status === 'Passed'
+        const standing = row.standing ?? row.rank;
+        const standingHtml = renderStandingBadge(standing);
+        const remarksBadge = row.remarks === 'Passed' || row.status === 'Passed'
             ? '<span class="badge bg-success">Passed</span>'
             : '<span class="badge bg-danger">Failed</span>';
 
         return `
             <tr>
-                <td>${rankHtml}</td>
+                <td>${escapeHtml(row.Personnel_Rank || '—')}</td>
                 <td>
                     <div class="fw-medium">${escapeHtml(row.Fullname)}</div>
-                    <small class="text-muted">${escapeHtml(row.Academic_Number || '—')}</small>
+                    <small class="text-muted">${escapeHtml(row.Academic_Number || '')}</small>
                 </td>
-                <td><small>${escapeHtml(row.batch_names || '—')}</small></td>
-                <td>${row.Score}</td>
-                <td><strong>${row.Percentage}%</strong></td>
-                <td>${statusBadge}</td>
+                <td><strong>${escapeHtml(row.score_display ?? row.Score)}</strong></td>
+                <td><strong>${formatGrade(row.grade_percent)}%</strong></td>
+                <td>${standingHtml}</td>
+                <td>${remarksBadge}</td>
                 <td><small>${escapeHtml(row.time_taken || 'N/A')}</small></td>
                 <td><small>${formatDateTime(row.Submission_Date)}</small></td>
                 <td>
@@ -174,11 +177,21 @@ function renderNotSubmitted(rows) {
     `).join('');
 }
 
-function renderRankBadge(rank) {
-    if (rank === 1) return '<span class="rank-medal rank-1">1</span>';
-    if (rank === 2) return '<span class="rank-medal rank-2">2</span>';
-    if (rank === 3) return '<span class="rank-medal rank-3">3</span>';
-    return `<span class="text-muted fw-semibold">${rank}</span>`;
+function renderStandingBadge(standing) {
+    if (standing === 1) return '<span class="rank-medal rank-1">1</span>';
+    if (standing === 2) return '<span class="rank-medal rank-2">2</span>';
+    if (standing === 3) return '<span class="rank-medal rank-3">3</span>';
+    return `<span class="text-muted fw-semibold">${standing}</span>`;
+}
+
+function formatGrade(value) {
+    const num = parseFloat(value);
+    return Number.isFinite(num) ? num.toFixed(1) : '—';
+}
+
+function formatScore(value) {
+    const num = parseFloat(value);
+    return Number.isFinite(num) ? (Number.isInteger(num) ? String(num) : num.toFixed(1)) : '—';
 }
 
 function switchTab(tab) {
@@ -209,9 +222,10 @@ async function viewDetail(resultId) {
 }
 
 function renderDetail(data) {
-    document.getElementById('detailModalTitle').textContent = data.Fullname || 'Student Response';
+    const rankLabel = data.Personnel_Rank ? `${data.Personnel_Rank} ` : '';
+    document.getElementById('detailModalTitle').textContent = rankLabel + (data.Fullname || 'Student Response');
     document.getElementById('detailModalSub').textContent =
-        `${data.Remarks} • ${data.Score}/${data.total_questions} (${parseFloat(data.Percentage).toFixed(1)}%) • ${data.time_taken}`;
+        `${data.remarks || data.status} • ${data.score_display} (${formatScore(data.raw_percent ?? data.Percentage)}% raw) • Grade ${formatGrade(data.grade_percent)}% • ${data.time_taken}`;
 
     const questionsHtml = (data.questions || []).map((q, index) => {
         const isCorrect = String(q.user_is_correct) === '1';
@@ -248,7 +262,7 @@ function renderDetail(data) {
         <div class="mb-3 p-3 rounded bg-light">
             <div class="row g-2 small">
                 <div class="col-md-4"><strong>Submitted:</strong> ${formatDateTime(data.Submission_Date)}</div>
-                <div class="col-md-4"><strong>Passing:</strong> ${data.Passing_Score}%</div>
+                <div class="col-md-4"><strong>Passing score:</strong> ${formatScore(data.passing_score ?? data.Passing_Score)}%</div>
                 <div class="col-md-4"><strong>Academic No.:</strong> ${escapeHtml(data.Academic_Number || '—')}</div>
             </div>
         </div>
@@ -259,18 +273,21 @@ function renderDetail(data) {
 function exportCsv() {
     if (!rankingsData.length) return;
 
-    const headers = ['Rank', 'Name', 'Academic Number', 'Batch', 'Score', 'Percentage', 'Status', 'Time Taken', 'Submitted'];
+    const headers = [
+        'Personnel Rank', 'Name', 'Academic Number', 'Score', 'Grade (%)',
+        'Standing', 'Remarks', 'Time Taken', 'Submitted'
+    ];
     const lines = [headers.join(',')];
 
     rankingsData.forEach(row => {
         lines.push([
-            row.rank,
+            csvCell(row.Personnel_Rank),
             csvCell(row.Fullname),
             csvCell(row.Academic_Number),
-            csvCell(row.batch_names),
-            row.Score,
-            row.Percentage,
-            row.status,
+            csvCell(row.score_display ?? row.Score),
+            formatGrade(row.grade_percent),
+            row.standing ?? row.rank,
+            csvCell(row.remarks || row.status),
             csvCell(row.time_taken),
             csvCell(row.Submission_Date)
         ].join(','));
@@ -284,6 +301,8 @@ function exportCsv() {
     link.download = `${sanitizeFilename(title)}-rankings.csv`;
     link.click();
     URL.revokeObjectURL(url);
+
+    axios.post(`${API}?action=log_export&exam_id=${EXAM_ID}`).catch(() => {});
 }
 
 function csvCell(value) {

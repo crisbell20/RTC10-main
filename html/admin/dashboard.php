@@ -159,12 +159,15 @@ $userName = $_SESSION['user_name'] ?? 'User';
 
             <!-- System Activity Log -->
             <div class="section-card">
-                <div class="section-header">
-                    <i class="bi bi-clock-history" style="color: var(--secondary-color); font-size: 1.3rem;"></i>
-                    <div>
-                        <h5>System Activity Log</h5>
-                        <p>Recent system events and changes</p>
+                <div class="section-header d-flex justify-content-between align-items-center">
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="bi bi-clock-history" style="color: var(--secondary-color); font-size: 1.3rem;"></i>
+                        <div>
+                            <h5 class="mb-0">Recent Activity</h5>
+                            <p class="mb-0">Latest audit log entries</p>
+                        </div>
                     </div>
+                    <a href="../masterfiles/audit-logs.php" class="btn btn-sm btn-outline-primary">View all</a>
                 </div>
                 <div class="section-body">
                     <table class="table">
@@ -172,32 +175,16 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             <tr>
                                 <th>User</th>
                                 <th>Action</th>
-                                <th>Type</th>
+                                <th>Module</th>
                                 <th>Timestamp</th>
                                 <th>Status</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="recentAuditBody">
                             <tr>
-                                <td><strong>Administrator</strong></td>
-                                <td>User Account Created</td>
-                                <td>User Management</td>
-                                <td>2026-02-20 10:35</td>
-                                <td><span class="badge badge-success">Success</span></td>
-                            </tr>
-                            <tr>
-                                <td><strong>CCMD Officer</strong></td>
-                                <td>Course Published</td>
-                                <td>Course Management</td>
-                                <td>2026-02-20 09:22</td>
-                                <td><span class="badge badge-success">Success</span></td>
-                            </tr>
-                            <tr>
-                                <td><strong>System</strong></td>
-                                <td>Database Backup</td>
-                                <td>System Maintenance</td>
-                                <td>2026-02-20 02:15</td>
-                                <td><span class="badge badge-success">Success</span></td>
+                                <td colspan="5" class="text-center text-muted py-3">
+                                    <i class="bi bi-hourglass-split"></i> Loading activity...
+                                </td>
                             </tr>
                         </tbody>
                     </table>
@@ -283,6 +270,43 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     activeCoursesEl.textContent = '0';
                 }
             });
+
+        axios.get('../../api/masterfiles/audit-logs.php?action=recent&limit=8', { withCredentials: true })
+            .then(function (response) {
+                const tbody = document.getElementById('recentAuditBody');
+                if (!tbody) return;
+
+                if (!response.data.success || !response.data.data.length) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No recent activity logged yet.</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = response.data.data.map(function (row) {
+                    const statusBadge = (row.Status || 'SUCCESS') === 'FAILED'
+                        ? '<span class="badge bg-danger">Failed</span>'
+                        : '<span class="badge bg-success">Success</span>';
+                    const when = row.Timestamp ? new Date(row.Timestamp).toLocaleString() : '—';
+                    return '<tr>'
+                        + '<td><strong>' + escapeHtml(row.user_display || 'Unknown') + '</strong></td>'
+                        + '<td><small>' + escapeHtml(row.Action || '—') + '</small></td>'
+                        + '<td><span class="badge bg-light text-dark border">' + escapeHtml(row.Module || '—') + '</span></td>'
+                        + '<td><small>' + when + '</small></td>'
+                        + '<td>' + statusBadge + '</td>'
+                        + '</tr>';
+                }).join('');
+            })
+            .catch(function () {
+                const tbody = document.getElementById('recentAuditBody');
+                if (tbody) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Unable to load recent activity.</td></tr>';
+                }
+            });
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text ?? '';
+            return div.innerHTML;
+        }
     </script>
 </body>
 </html>

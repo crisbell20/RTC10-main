@@ -191,7 +191,7 @@ $mustChangePassword = isset($_SESSION['must_change_password']) ? (int)$_SESSION[
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../js/examinee/examinee-dashboard.js?v=3"></script>
+    <script src="../../js/examinee/examinee-dashboard.js?v=4"></script>
     <script>
         const MUST_CHANGE_PASSWORD = <?= $mustChangePassword ? 'true' : 'false' ?>;
 

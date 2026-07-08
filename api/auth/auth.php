@@ -35,6 +35,7 @@ try {
     // Include database connection
     $pdo = null;
     require_once __DIR__ . '/../config/connection-pdo.php';
+    require_once __DIR__ . '/../includes/audit-log-utils.php';
     if (!($pdo instanceof PDO)) {
         throw new Exception('Database connection not established');
     }
@@ -49,6 +50,13 @@ try {
     
     // Check if user exists
     if (!$user) {
+        writeAuditLog($pdo, [
+            'user_id' => null,
+            'module' => 'AUTH',
+            'action' => 'LOGIN_FAILED',
+            'outcome' => "Failed login attempt for email: {$email}",
+            'status' => 'FAILED',
+        ]);
         http_response_code(401);
         echo json_encode([
             'success' => false,
@@ -70,6 +78,16 @@ try {
     error_log("Password length after verify: " . strlen($password));
 
     if (empty($passwordHash) || !$verifyResult) {
+        writeAuditLog($pdo, [
+            'user_id' => (int)$user['User_ID'],
+            'user_role' => $user['Role_Name'] ?? null,
+            'module' => 'AUTH',
+            'action' => 'LOGIN_FAILED',
+            'outcome' => "Invalid password for {$email}",
+            'status' => 'FAILED',
+            'entity_type' => 'user',
+            'entity_id' => (int)$user['User_ID'],
+        ]);
         error_log("FAILED - Password at error: '" . $password . "' (length: " . strlen($password) . ")");
         http_response_code(401);
         echo json_encode([
@@ -88,6 +106,16 @@ try {
 
     // Check if user's account is active
     if ($user['Status'] !== 'Active') {
+        writeAuditLog($pdo, [
+            'user_id' => (int)$user['User_ID'],
+            'user_role' => $user['Role_Name'] ?? null,
+            'module' => 'AUTH',
+            'action' => 'LOGIN_FAILED',
+            'outcome' => "Inactive account login attempt: {$email}",
+            'status' => 'FAILED',
+            'entity_type' => 'user',
+            'entity_id' => (int)$user['User_ID'],
+        ]);
         http_response_code(403);
         echo json_encode([
             'success' => false,
@@ -127,6 +155,17 @@ try {
     $_SESSION['user_role'] = $user['Role_Name'];
     $_SESSION['user_name'] = $user['Fullname'];
     $_SESSION['must_change_password'] = isset($user['Must_Change_Password']) ? (int)$user['Must_Change_Password'] : 0;
+
+    writeAuditLog($pdo, [
+        'user_id' => (int)$user['User_ID'],
+        'user_role' => $user['Role_Name'] ?? null,
+        'module' => 'AUTH',
+        'action' => 'LOGIN',
+        'outcome' => "User {$user['Fullname']} logged in",
+        'status' => 'SUCCESS',
+        'entity_type' => 'user',
+        'entity_id' => (int)$user['User_ID'],
+    ]);
 
     // Return success response
     http_response_code(200);

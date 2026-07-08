@@ -134,6 +134,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                     <th>Email</th>
                                     <th>Username</th>
                                     <th>Academic No.</th>
+                                    <th>Personnel Rank</th>
                                     <th>Role</th>
                                     <th>Batch Assignment</th>
                                     <th>Status</th>
@@ -143,7 +144,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             </thead>
                             <tbody id="usersTableBody">
                                 <tr>
-                                    <td colspan="9" class="text-center text-muted py-4">
+                                    <td colspan="10" class="text-center text-muted py-4">
                                         <i class="bi bi-hourglass-split"></i> Loading...
                                     </td>
                                 </tr>
@@ -232,6 +233,13 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             <label for="academic_number" class="form-label">Academic Number (optional)</label>
                             <input type="text" class="form-control" id="academic_number" name="academic_number"
                                    maxlength="50">
+                        </div>
+                        <div class="mb-3" id="personnelRankSection">
+                            <label for="personnel_rank" class="form-label">Personnel Rank (optional)</label>
+                            <select class="form-select" id="personnel_rank" name="personnel_rank">
+                                <option value="">— None —</option>
+                            </select>
+                            <small class="form-text text-muted">PNP rank (e.g. Pat, SSg, PLt)</small>
                         </div>
                         <div class="mb-3">
                             <label for="password" class="form-label">Password <span id="passwordOptionalLabel" style="display:none;">(Leave blank to keep current)</span></label>

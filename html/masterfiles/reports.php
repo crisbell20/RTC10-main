@@ -50,18 +50,17 @@ $userName = $_SESSION['user_name'] ?? 'User';
 
         <div class="main-content">
             <div class="page-header">
-                <div class="d-flex justify-content-between align-items-center">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <h2>Reports & Analytics</h2>
-                    <button class="btn btn-add-user" onclick="exportReport()">
-                        <i class="bi bi-download me-2"></i>Export Report
+                    <button class="btn btn-add-user" id="exportReportBtn">
+                        <i class="bi bi-download me-2"></i>Export CSV
                     </button>
                 </div>
             </div>
 
-            <!-- Filters -->
             <div class="filter-card">
                 <div class="row g-3">
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label class="form-label small">Date Range</label>
                         <select id="dateRange" class="form-select form-select-sm">
                             <option value="7">Last 7 days</option>
@@ -71,159 +70,272 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             <option value="all">All time</option>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label class="form-label small">Course</label>
                         <select id="filterCourse" class="form-select form-select-sm">
                             <option value="">All courses</option>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label class="form-label small">Subject</label>
                         <select id="filterSubject" class="form-select form-select-sm">
                             <option value="">All subjects</option>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
+                        <label class="form-label small">Batch</label>
+                        <select id="filterBatch" class="form-select form-select-sm">
+                            <option value="">All batches</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small">Search student</label>
+                        <input type="search" id="studentSearch" class="form-control form-control-sm" placeholder="Name or ID">
+                    </div>
+                    <div class="col-md-2">
                         <label class="form-label small">&nbsp;</label>
-                        <button class="btn btn-primary btn-sm w-100" onclick="loadReports()">
-                            <i class="bi bi-funnel me-2"></i>Apply Filters
+                        <button class="btn btn-primary btn-sm w-100" id="applyFiltersBtn">
+                            <i class="bi bi-funnel me-1"></i>Apply
                         </button>
                     </div>
                 </div>
             </div>
 
-            <!-- Key Metrics -->
-            <div class="row g-3 mb-4">
-                <div class="col-md-3">
-                    <div class="metric-card">
-                        <i class="bi bi-people-fill" style="font-size: 2rem; color: #2563eb;"></i>
-                        <div class="metric-value" id="totalExaminees">--</div>
-                        <div class="metric-label">Total Examinees</div>
+            <ul class="nav nav-tabs mb-4" id="reportTabs">
+                <li class="nav-item"><button class="nav-link active" data-tab="overview" type="button">Overview</button></li>
+                <li class="nav-item"><button class="nav-link" data-tab="students" type="button">By Student</button></li>
+                <li class="nav-item"><button class="nav-link" data-tab="subjects" type="button">By Subject</button></li>
+            </ul>
+
+            <!-- OVERVIEW TAB -->
+            <div id="tabOverview">
+                <div class="row g-3 mb-4">
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <i class="bi bi-people-fill metric-icon text-primary"></i>
+                            <div class="metric-value" id="activeExaminees">--</div>
+                            <div class="metric-label">Active Examinees</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <i class="bi bi-pencil-square metric-icon text-success"></i>
+                            <div class="metric-value" id="examsAdministered">--</div>
+                            <div class="metric-label">Exams Administered</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <i class="bi bi-check-circle-fill metric-icon text-warning"></i>
+                            <div class="metric-value" id="passRate">--</div>
+                            <div class="metric-label">Overall Pass Rate</div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="metric-card">
+                            <i class="bi bi-star-fill metric-icon text-purple"></i>
+                            <div class="metric-value" id="avgScore">--</div>
+                            <div class="metric-label">Average Score</div>
+                        </div>
                     </div>
                 </div>
-                <div class="col-md-3">
-                    <div class="metric-card">
-                        <i class="bi bi-pencil-square" style="font-size: 2rem; color: #10b981;"></i>
-                        <div class="metric-value" id="totalExams">--</div>
-                        <div class="metric-label">Total Exams</div>
+
+                <div class="section-card mb-3">
+                    <div class="section-header">
+                        <div>
+                            <h5><i class="bi bi-exclamation-triangle text-danger me-2"></i>At-Risk Students</h5>
+                            <p>Students needing intervention based on pass rate and scores</p>
+                        </div>
+                    </div>
+                    <div class="section-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Student</th>
+                                        <th>Exams</th>
+                                        <th>Avg %</th>
+                                        <th>Pass Rate</th>
+                                        <th>Status</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="atRiskBody">
+                                    <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-                <div class="col-md-3">
-                    <div class="metric-card">
-                        <i class="bi bi-check-circle-fill" style="font-size: 2rem; color: #f59e0b;"></i>
-                        <div class="metric-value" id="completionRate">--</div>
-                        <div class="metric-label">Completion Rate</div>
+
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="section-card">
+                            <div class="section-header"><div><h5>Performance Trend</h5><p>Average scores over time</p></div></div>
+                            <div class="section-body"><div class="chart-container"><canvas id="performanceChart"></canvas></div></div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="section-card">
+                            <div class="section-header"><div><h5>Pass/Fail Distribution</h5><p>Finished submissions</p></div></div>
+                            <div class="section-body"><div class="chart-container"><canvas id="passFailChart"></canvas></div></div>
+                        </div>
                     </div>
                 </div>
-                <div class="col-md-3">
-                    <div class="metric-card">
-                        <i class="bi bi-star-fill" style="font-size: 2rem; color: #a855f7;"></i>
-                        <div class="metric-value" id="avgScore">--</div>
-                        <div class="metric-label">Average Score</div>
+
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <div class="section-card">
+                            <div class="section-header"><div><h5>Top Performing Subjects</h5><p>Highest average scores</p></div></div>
+                            <div class="section-body"><div class="chart-container"><canvas id="subjectsChart"></canvas></div></div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="section-card">
+                            <div class="section-header"><div><h5>Subjects Needing Attention</h5><p>Lowest pass rates (min. 3 attempts)</p></div></div>
+                            <div class="section-body"><div class="chart-container"><canvas id="weakSubjectsChart"></canvas></div></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card mb-3">
+                    <div class="section-header">
+                        <div>
+                            <h5>Exam Participation</h5>
+                            <p>Click a bar to view exam responses</p>
+                        </div>
+                    </div>
+                    <div class="section-body"><div class="chart-container"><canvas id="participationChart"></canvas></div></div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <div><h5>Recent Exam Attempts</h5><p>Latest finished submissions</p></div>
+                    </div>
+                    <div class="section-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Examinee</th>
+                                        <th>Exam</th>
+                                        <th>Subject</th>
+                                        <th>Date</th>
+                                        <th>Score</th>
+                                        <th>%</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="resultsTableBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mt-2">
+                            <small class="text-muted" id="attemptsPaginationInfo"></small>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-secondary" id="attemptsPrevBtn" disabled>Prev</button>
+                                <button class="btn btn-outline-secondary" id="attemptsNextBtn" disabled>Next</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Charts Row 1 -->
-            <div class="row g-3 mb-3">
-                <div class="col-md-6">
-                    <div class="section-card">
-                        <div class="section-header">
-                            <div>
-                                <h5>Exam Performance Trend</h5>
-                                <p>Average scores over time</p>
-                            </div>
-                        </div>
-                        <div class="section-body">
-                            <div class="chart-container">
-                                <canvas id="performanceChart"></canvas>
-                            </div>
-                        </div>
-                    </div>
+            <!-- STUDENTS TAB -->
+            <div id="tabStudents" style="display:none;">
+                <div class="d-flex flex-wrap gap-2 mb-3">
+                    <select id="studentStatusFilter" class="form-select form-select-sm" style="max-width:200px;">
+                        <option value="all">All students</option>
+                        <option value="on_track">On track</option>
+                        <option value="needs_review">Needs review</option>
+                        <option value="at_risk">At risk</option>
+                    </select>
                 </div>
-                <div class="col-md-6">
-                    <div class="section-card">
-                        <div class="section-header">
-                            <div>
-                                <h5>Pass/Fail Distribution</h5>
-                                <p>Overall exam results</p>
-                            </div>
-                        </div>
-                        <div class="section-body">
-                            <div class="chart-container">
-                                <canvas id="passFailChart"></canvas>
-                            </div>
-                        </div>
+                <div class="section-card">
+                    <div class="section-header">
+                        <div><h5>Student Performance Summary</h5><p>Overall results rolled up per examinee</p></div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Charts Row 2 -->
-            <div class="row g-3 mb-3">
-                <div class="col-md-6">
-                    <div class="section-card">
-                        <div class="section-header">
-                            <div>
-                                <h5>Top Performing Subjects</h5>
-                                <p>Average scores by subject</p>
-                            </div>
+                    <div class="section-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Student</th>
+                                        <th>Batch</th>
+                                        <th>Exams</th>
+                                        <th>Avg %</th>
+                                        <th>Pass Rate</th>
+                                        <th>Best Subject</th>
+                                        <th>Weakest Subject</th>
+                                        <th>Status</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="studentSummaryBody"></tbody>
+                            </table>
                         </div>
-                        <div class="section-body">
-                            <div class="chart-container">
-                                <canvas id="subjectsChart"></canvas>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="section-card">
-                        <div class="section-header">
-                            <div>
-                                <h5>Exam Participation</h5>
-                                <p>Number of examinees per exam</p>
-                            </div>
-                        </div>
-                        <div class="section-body">
-                            <div class="chart-container">
-                                <canvas id="participationChart"></canvas>
-                            </div>
-                        </div>
+                        <div id="studentSummaryEmpty" class="text-center text-muted py-4" style="display:none;">No student data for selected filters.</div>
                     </div>
                 </div>
             </div>
 
-            <!-- Detailed Table -->
-            <div class="section-card">
-                <div class="section-header">
+            <!-- SUBJECTS TAB -->
+            <div id="tabSubjects" style="display:none;">
+                <div class="section-card">
+                    <div class="section-header">
+                        <div><h5>Subject Performance Summary</h5><p>Health metrics per subject</p></div>
+                    </div>
+                    <div class="section-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Subject</th>
+                                        <th>Course</th>
+                                        <th>Exams</th>
+                                        <th>Students</th>
+                                        <th>Attempts</th>
+                                        <th>Avg %</th>
+                                        <th>Pass Rate</th>
+                                        <th>Range</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="subjectSummaryBody"></tbody>
+                            </table>
+                        </div>
+                        <div id="subjectSummaryEmpty" class="text-center text-muted py-4" style="display:none;">No subject data for selected filters.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="studentDetailModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
                     <div>
-                        <h5>Detailed Exam Results</h5>
-                        <p>Complete breakdown of all exam attempts</p>
+                        <h5 class="modal-title" id="studentDetailTitle">Student Detail</h5>
+                        <small class="text-muted" id="studentDetailSub"></small>
                     </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
-                <div class="section-body">
-                    <div class="table-responsive">
-                        <table class="table">
-                            <thead>
-                                <tr>
-                                    <th>Examinee</th>
-                                    <th>Exam</th>
-                                    <th>Subject</th>
-                                    <th>Date</th>
-                                    <th>Score</th>
-                                    <th>Percentage</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody id="resultsTableBody">
-                                <tr>
-                                    <td colspan="7" class="text-center text-muted py-4">
-                                        <i class="bi bi-hourglass-split"></i> Loading...
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
+                <div class="modal-body" id="studentDetailBody"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="subjectDetailModal" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <div>
+                        <h5 class="modal-title" id="subjectDetailTitle">Subject Detail</h5>
+                        <small class="text-muted" id="subjectDetailSub"></small>
                     </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
+                <div class="modal-body" id="subjectDetailBody"></div>
             </div>
         </div>
     </div>
@@ -233,6 +345,6 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../js/masterfiles/reports.js"></script>
+    <script src="../../js/masterfiles/reports.js?v=3"></script>
 </body>
 </html>

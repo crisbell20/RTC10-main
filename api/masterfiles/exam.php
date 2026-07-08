@@ -9,6 +9,7 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 }
 
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
@@ -31,9 +32,15 @@ try {
             exit;
         }
 
-        if (empty($answers) || count($answers) < 2) {
+        if (empty($answers) || count($answers) < 5) {
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'At least 2 answer options are required']);
+            echo json_encode(['success' => false, 'message' => 'Exactly 5 answer options are required (A through E)']);
+            exit;
+        }
+
+        if (count($answers) > 5) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'A maximum of 5 answer options is allowed']);
             exit;
         }
 
@@ -67,6 +74,8 @@ try {
 
         $pdo->commit();
 
+        auditFromSession($pdo, 'QUESTION', 'CREATE_QUESTION', "Question {$question_id} added to subject {$subject_id}", 'SUCCESS', 'question', (int)$question_id);
+
         http_response_code(201);
         echo json_encode(['success' => true, 'message' => 'Question added successfully', 'question_id' => $question_id]);
         exit;
@@ -86,9 +95,15 @@ try {
             exit;
         }
 
-        if (empty($answers) || count($answers) < 2) {
+        if (empty($answers) || count($answers) < 5) {
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'At least 2 answer options are required']);
+            echo json_encode(['success' => false, 'message' => 'Exactly 5 answer options are required (A through E)']);
+            exit;
+        }
+
+        if (count($answers) > 5) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'A maximum of 5 answer options is allowed']);
             exit;
         }
 
@@ -124,6 +139,8 @@ try {
         }
 
         $pdo->commit();
+
+        auditFromSession($pdo, 'QUESTION', 'UPDATE_QUESTION', "Question {$question_id} updated", 'SUCCESS', 'question', (int)$question_id);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Question updated successfully']);
@@ -164,6 +181,8 @@ try {
             $stmt->execute([$question_id]);
 
             $pdo->commit();
+
+            auditFromSession($pdo, 'QUESTION', 'DELETE_QUESTION', "Question {$question_id} deleted", 'SUCCESS', 'question', (int)$question_id);
 
             http_response_code(200);
             echo json_encode(['success' => true, 'message' => 'Question deleted successfully']);
@@ -225,8 +244,13 @@ try {
                 // Collect answer options
                 $answers = [];
                 $correct_answer = strtoupper(trim($q['Correct_Answer'] ?? 'A'));
+                if (!in_array($correct_answer, ['A', 'B', 'C', 'D', 'E'], true)) {
+                    $failed++;
+                    $errors[] = "Row $rowNum: Correct_Answer must be A, B, C, D, or E";
+                    continue;
+                }
 
-                foreach (['A', 'B', 'C', 'D'] as $option) {
+                foreach (['A', 'B', 'C', 'D', 'E'] as $option) {
                     $optionKey = 'Option_' . $option;
                     if (!empty($q[$optionKey])) {
                         $answers[] = [
@@ -236,9 +260,9 @@ try {
                     }
                 }
 
-                if (count($answers) < 2) {
+                if (count($answers) < 5) {
                     $failed++;
-                    $errors[] = "Row $rowNum: At least 2 answer options required";
+                    $errors[] = "Row $rowNum: All 5 answer options (Option_A through Option_E) are required";
                     continue;
                 }
 
@@ -257,6 +281,8 @@ try {
             }
 
             $pdo->commit();
+
+            auditFromSession($pdo, 'QUESTION', 'IMPORT_QUESTIONS', "Imported {$imported} questions (failed: {$failed})", 'SUCCESS', 'question', null);
 
             $message = "Import completed. Imported: $imported";
             if ($failed > 0) {
@@ -281,30 +307,44 @@ try {
 
     // Get questions with filters
     if ($request_method === 'GET' && ($action === 'list' || $action === 'get_questions')) {
+        $course_id = $_GET['course_id'] ?? '';
         $subject_id = $_GET['subject_id'] ?? '';
-        $search = $_GET['search'] ?? '';
+        $search = trim($_GET['search'] ?? '');
 
         $query = 'SELECT q.Question_ID, q.Subject_ID, q.Question_Text, q.Question_Type, q.Added_Date,
-                         s.Subject_Name, s.Subject_Code,
-                         u.Fullname as Created_By
+                         s.Subject_Name, s.Subject_Code, s.Course_ID,
+                         c.Course_Name,
+                         u.Fullname AS Created_By,
+                         (SELECT COUNT(DISTINCT eq.Exam_ID)
+                          FROM tbl_exam_question eq
+                          WHERE eq.Question_ID = q.Question_ID) AS exam_usage_count
                   FROM tbl_question_bank q
                   INNER JOIN tbl_subject s ON q.Subject_ID = s.Subject_ID
+                  INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
                   INNER JOIN tbl_user u ON q.User_ID = u.User_ID
                   WHERE 1=1';
 
         $params = [];
+
+        if (!empty($course_id)) {
+            $query .= ' AND s.Course_ID = ?';
+            $params[] = $course_id;
+        }
 
         if (!empty($subject_id)) {
             $query .= ' AND q.Subject_ID = ?';
             $params[] = $subject_id;
         }
 
-        if (!empty($search)) {
-            $query .= ' AND q.Question_Text LIKE ?';
-            $params[] = '%' . $search . '%';
+        if ($search !== '') {
+            $query .= ' AND (q.Question_Text LIKE ? OR s.Subject_Name LIKE ? OR c.Course_Name LIKE ?)';
+            $like = '%' . $search . '%';
+            $params[] = $like;
+            $params[] = $like;
+            $params[] = $like;
         }
 
-        $query .= ' ORDER BY q.Added_Date DESC';
+        $query .= ' ORDER BY c.Course_Name ASC, s.Subject_Name ASC, q.Added_Date DESC';
 
         $stmt = $pdo->prepare($query);
         $stmt->execute($params);

@@ -54,3 +54,21 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
+
+.metric-icon {
+    font-size: 2rem;
+}
+
+.text-purple {
+    color: #a855f7 !important;
+}
+
+#reportTabs .nav-link {
+    cursor: pointer;
+    color: #6b7280;
+}
+
+#reportTabs .nav-link.active {
+    color: #2563eb;
+    font-weight: 600;
+}

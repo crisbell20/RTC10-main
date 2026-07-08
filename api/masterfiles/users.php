@@ -24,6 +24,8 @@ if (!in_array($userRole, ['Admin', 'CCMD'])) {
 
 // Use correct path to shared PDO config from /api/masterfiles
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/exam-code-utils.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 // Read JSON/body once so we can also accept action in JSON payload
@@ -44,10 +46,11 @@ if ($request_method === 'POST' && $userRole !== 'Admin') {
 try {
     // Get all users
     if ($request_method === 'GET' && $action === 'list') {
-        $usersQuery = 'SELECT u.User_ID, u.Fullname, u.Email, u.Username, u.Academic_Number, r.Role_Name, u.Status, u.Date_Created 
+        $rankCol = personnelRankColumnExists($pdo) ? 'u.Personnel_Rank,' : '';
+        $usersQuery = "SELECT u.User_ID, u.Fullname, u.Email, u.Username, u.Academic_Number, {$rankCol} r.Role_Name, u.Status, u.Date_Created 
                        FROM tbl_user u 
                        LEFT JOIN tbl_role r ON u.Role_ID = r.Role_ID 
-                       ORDER BY u.Date_Created DESC';
+                       ORDER BY u.Date_Created DESC";
         $usersStmt = $pdo->prepare($usersQuery);
         $usersStmt->execute();
         $users = $usersStmt->fetchAll();
@@ -101,6 +104,15 @@ try {
         exit;
     }
 
+    if ($request_method === 'GET' && $action === 'personnel_ranks') {
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'data' => getPersonnelRankOptions()
+        ]);
+        exit;
+    }
+
     // Add new user
     if ($request_method === 'POST' && $action === 'add') {
         $fullname = trim($input['fullname'] ?? $_POST['fullname'] ?? '');
@@ -109,6 +121,7 @@ try {
         $password = $input['password'] ?? $_POST['password'] ?? '';
         $role_id = $input['role_id'] ?? $_POST['role_id'] ?? '';
         $academic_number = $input['academic_number'] ?? $_POST['academic_number'] ?? null;
+        $personnel_rank = trim($input['personnel_rank'] ?? $_POST['personnel_rank'] ?? '') ?: null;
 
         // Validate fullname - must contain only letters, spaces, dots, and hyphens
         if (empty($fullname)) {
@@ -231,21 +244,35 @@ try {
         }
 
         $passwordHash = password_hash($password, PASSWORD_BCRYPT);
+        $hasRank = personnelRankColumnExists($pdo);
 
         // For Examinee: mark Must_Change_Password = 1 so they are forced to change on first login
         if ($roleName === 'Examinee') {
-            $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Username, Password_Hash, Must_Change_Password, Academic_Number, Date_Created, Status) VALUES (?, ?, ?, ?, ?, 1, ?, NOW(), ?)');
-            $stmt->execute([$role_id, $fullname, $email, $username, $passwordHash, $academic_number, 'Active']);
+            if ($hasRank) {
+                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Username, Password_Hash, Must_Change_Password, Academic_Number, Personnel_Rank, Date_Created, Status) VALUES (?, ?, ?, ?, ?, 1, ?, ?, NOW(), ?)');
+                $stmt->execute([$role_id, $fullname, $email, $username, $passwordHash, $academic_number, $personnel_rank, 'Active']);
+            } else {
+                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Username, Password_Hash, Must_Change_Password, Academic_Number, Date_Created, Status) VALUES (?, ?, ?, ?, ?, 1, ?, NOW(), ?)');
+                $stmt->execute([$role_id, $fullname, $email, $username, $passwordHash, $academic_number, 'Active']);
+            }
         } else {
-            $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Username, Password_Hash, Academic_Number, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)');
-            $stmt->execute([$role_id, $fullname, $email, $username, $passwordHash, $academic_number, 'Active']);
+            if ($hasRank) {
+                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Username, Password_Hash, Academic_Number, Personnel_Rank, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)');
+                $stmt->execute([$role_id, $fullname, $email, $username, $passwordHash, $academic_number, $personnel_rank, 'Active']);
+            } else {
+                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Username, Password_Hash, Academic_Number, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)');
+                $stmt->execute([$role_id, $fullname, $email, $username, $passwordHash, $academic_number, 'Active']);
+            }
         }
+
+        $newUserId = (int)$pdo->lastInsertId();
+        auditFromSession($pdo, 'USER', 'CREATE_USER', "Created user {$fullname} (ID {$newUserId})", 'SUCCESS', 'user', $newUserId);
 
         http_response_code(201);
         echo json_encode([
             'success' => true,
             'message' => 'User added successfully',
-            'user_id' => $pdo->lastInsertId()
+            'user_id' => $newUserId
         ]);
         exit;
     }
@@ -258,6 +285,7 @@ try {
         $role_id = $input['role_id'] ?? $_POST['role_id'] ?? '';
         $status = $input['status'] ?? $_POST['status'] ?? 'Active';
         $academic_number = $input['academic_number'] ?? $_POST['academic_number'] ?? null;
+        $personnel_rank = trim($input['personnel_rank'] ?? $_POST['personnel_rank'] ?? '') ?: null;
         $new_password = $input['new_password'] ?? $_POST['new_password'] ?? null;
 
         // Validate user ID
@@ -326,8 +354,13 @@ try {
         }
 
         // Update user info
-        $stmt = $pdo->prepare('UPDATE tbl_user SET Fullname = ?, Email = ?, Role_ID = ?, Academic_Number = ?, Status = ? WHERE User_ID = ?');
-        $stmt->execute([$fullname, $email, $role_id, $academic_number, $status, $user_id]);
+        if (personnelRankColumnExists($pdo)) {
+            $stmt = $pdo->prepare('UPDATE tbl_user SET Fullname = ?, Email = ?, Role_ID = ?, Academic_Number = ?, Personnel_Rank = ?, Status = ? WHERE User_ID = ?');
+            $stmt->execute([$fullname, $email, $role_id, $academic_number, $personnel_rank, $status, $user_id]);
+        } else {
+            $stmt = $pdo->prepare('UPDATE tbl_user SET Fullname = ?, Email = ?, Role_ID = ?, Academic_Number = ?, Status = ? WHERE User_ID = ?');
+            $stmt->execute([$fullname, $email, $role_id, $academic_number, $status, $user_id]);
+        }
 
         // If new password is provided, update it
         if (!empty($new_password)) {
@@ -344,6 +377,8 @@ try {
             $pwdStmt = $pdo->prepare('UPDATE tbl_user SET Password_Hash = ? WHERE User_ID = ?');
             $pwdStmt->execute([$passwordHash, $user_id]);
         }
+
+        auditFromSession($pdo, 'USER', 'UPDATE_USER', "Updated user {$fullname} (ID {$user_id})", 'SUCCESS', 'user', (int)$user_id);
 
         http_response_code(200);
         echo json_encode([
@@ -368,6 +403,8 @@ try {
 
         $stmt = $pdo->prepare('DELETE FROM tbl_user WHERE User_ID = ?');
         $stmt->execute([$user_id]);
+
+        auditFromSession($pdo, 'USER', 'DELETE_USER', "Deleted user ID {$user_id}", 'SUCCESS', 'user', (int)$user_id);
 
         http_response_code(200);
         echo json_encode([
@@ -406,6 +443,8 @@ try {
         // Update the password
         $stmt = $pdo->prepare('UPDATE tbl_user SET Password_Hash = ? WHERE User_ID = ?');
         $stmt->execute([$passwordHash, $user_id]);
+
+        auditFromSession($pdo, 'USER', 'RESET_PASSWORD', "Admin reset password for user ID {$user_id}", 'SUCCESS', 'user', (int)$user_id);
 
         http_response_code(200);
         echo json_encode([

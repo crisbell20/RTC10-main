@@ -1,0 +1,245 @@
+/* Examinee Performance Page */
+
+.perf-page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.perf-filters {
+    min-width: 160px;
+}
+
+.perf-status-banner {
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.95rem;
+}
+
+.perf-status-banner.on-track {
+    background: #d1fae5;
+    border: 1px solid #6ee7b7;
+    color: #065f46;
+}
+
+.perf-status-banner.needs-review {
+    background: #fef3c7;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+}
+
+.perf-status-banner.at-risk {
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    color: #991b1b;
+}
+
+.perf-status-banner.no-data {
+    background: #f3f4f6;
+    border: 1px solid #d1d5db;
+    color: #4b5563;
+}
+
+.perf-status-banner i {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+
+.chart-container {
+    position: relative;
+    height: 280px;
+}
+
+.perf-subjects-table tbody tr {
+    cursor: pointer;
+}
+
+.perf-subjects-table tbody tr:hover {
+    background-color: #f0f9ff;
+}
+
+.perf-badge {
+    font-size: 0.75rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 6px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.perf-badge.strong {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.perf-badge.improving {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.perf-badge.on-track {
+    background: #e0e7ff;
+    color: #3730a3;
+}
+
+.perf-badge.needs-focus {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.perf-badge.at-risk {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.perf-badge.no-data {
+    background: #f3f4f6;
+    color: #6b7280;
+}
+
+.trend-icon.up {
+    color: var(--success-color);
+}
+
+.trend-icon.down {
+    color: var(--danger-color);
+}
+
+.trend-icon.stable {
+    color: #6b7280;
+}
+
+.recommendation-item {
+    border-left: 3px solid var(--secondary-color);
+    padding: 0.75rem 0.75rem 0.75rem 1rem;
+    margin-bottom: 0.75rem;
+    background: #f9fafb;
+    border-radius: 0 8px 8px 0;
+    font-size: 0.875rem;
+}
+
+.recommendation-item.priority-high {
+    border-left-color: var(--danger-color);
+    background: #fef2f2;
+}
+
+.recommendation-item.priority-medium {
+    border-left-color: var(--warning-color);
+    background: #fffbeb;
+}
+
+.recommendation-item.priority-low {
+    border-left-color: var(--success-color);
+    background: #f0fdf4;
+}
+
+.recommendation-item .rec-action {
+    margin-top: 0.35rem;
+}
+
+.subject-highlight-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.65rem 0;
+    border-bottom: 1px solid var(--border-color);
+    cursor: pointer;
+}
+
+.subject-highlight-item:last-child {
+    border-bottom: none;
+}
+
+.subject-highlight-item:hover {
+    color: var(--secondary-color);
+}
+
+.subject-detail-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+}
+
+.subject-detail-stat {
+    background: #f9fafb;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.75rem;
+    text-align: center;
+}
+
+.subject-detail-stat .value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--primary-color);
+}
+
+.subject-detail-stat .label {
+    font-size: 0.7rem;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.subject-chart-container {
+    height: 200px;
+    margin-bottom: 1.25rem;
+}
+
+.suggestion-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.suggestion-list li {
+    padding: 0.5rem 0;
+    padding-left: 1.25rem;
+    position: relative;
+    font-size: 0.875rem;
+    color: #374151;
+}
+
+.suggestion-list li::before {
+    content: '\2022';
+    position: absolute;
+    left: 0;
+    color: var(--secondary-color);
+    font-weight: bold;
+}
+
+.exam-attempt-row {
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0.85rem 1rem;
+    margin-bottom: 0.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.exam-attempt-row:hover {
+    background: #f9fafb;
+}
+
+@media (max-width: 768px) {
+    .perf-page-header {
+        flex-direction: column;
+    }
+
+    .perf-filters {
+        width: 100%;
+    }
+
+    .chart-container {
+        height: 220px;
+    }
+}

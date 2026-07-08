@@ -225,15 +225,26 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label">Filter by Subject</label>
-                        <select id="questionSubjectFilter" class="form-select">
-                            <option value="">All Subjects</option>
-                        </select>
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Filter by Course</label>
+                            <select id="questionCourseFilter" class="form-select">
+                                <option value="">All Courses</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Filter by Subject</label>
+                            <select id="questionSubjectFilter" class="form-select">
+                                <option value="">All Subjects</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Search Questions</label>
-                        <input type="text" id="questionSearchInput" class="form-control" placeholder="Search by question text...">
+                        <input type="text" id="questionSearchInput" class="form-control" placeholder="Search by question, subject, or course...">
+                    </div>
+                    <div class="mb-2">
+                        <small class="text-muted" id="questionPickerSummary"></small>
                     </div>
                     <div class="mb-3">
                         <div class="d-flex justify-content-between align-items-center mb-2">
@@ -259,7 +270,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../js/masterfiles/exams.js?v=7"></script>
+    <script src="../../js/masterfiles/exams.js?v=8"></script>
 </body>
 </html>
 

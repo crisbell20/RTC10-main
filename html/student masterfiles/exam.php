@@ -20,6 +20,10 @@
     </div>
 
     <div class="exam-container" id="examContainer" style="display: none;">
+        <div class="exam-proctor-notice">
+            <i class="bi bi-shield-exclamation me-1"></i>
+            <strong>Proctored exam:</strong> Stay in fullscreen. Tab switches and fullscreen exits are recorded and visible to proctors.
+        </div>
         <div class="exam-header">
             <div class="d-flex justify-content-between align-items-center">
                 <div>
@@ -65,6 +69,6 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    <script src="../../js/student/exam.js?v=2"></script>
+    <script src="../../js/student/exam.js?v=4"></script>
 </body>
 </html>

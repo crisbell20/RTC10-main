@@ -264,6 +264,8 @@ try {
             $exam_id
         ]);
 
+        logExamAuditAction($pdo, (int)$_SESSION['user_id'], 'UPDATE_EXAM', "Exam {$exam_id} updated");
+
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Exam updated']);
         exit;

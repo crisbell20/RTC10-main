@@ -6,6 +6,13 @@ let currentQuestionIndex = 0;
 let answers = {};
 let timerInterval = null;
 let startTime = null;
+let examSubmitted = false;
+let proctoringActive = false;
+let fullscreenEnforced = false;
+const lastViolationLog = {};
+
+const LOG_CHEATING_API = '../../api/examinee/log-cheating.php';
+const VIOLATION_COOLDOWN_MS = 3000;
 
 // Get session ID from URL
 const urlParams = new URLSearchParams(window.location.search);
@@ -56,9 +63,12 @@ async function loadExam() {
             initializeExam();
             renderQuestion(0);
             startTimer();
-            
+
             document.getElementById('loadingOverlay').style.display = 'none';
             document.getElementById('examContainer').style.display = 'block';
+
+            initProctoring();
+            enterProctorMode();
         }
     } catch (error) {
         console.error('Error loading exam:', error);
@@ -311,6 +321,8 @@ async function submitExam(autoSubmit = false) {
         });
         
         if (response.data.success) {
+            examSubmitted = true;
+            proctoringActive = false;
             const data = response.data.data;
             const canReview = data.can_review_responses === true;
             const resultId = data.result_id;
@@ -356,11 +368,150 @@ async function submitExam(autoSubmit = false) {
 
 // Prevent accidental page close
 window.addEventListener('beforeunload', (e) => {
-    if (sessionId && timerInterval) {
+    if (sessionId && timerInterval && !examSubmitted) {
         e.preventDefault();
         e.returnValue = '';
     }
 });
+
+// --- Proctoring: fullscreen enforcement & tab detection ---
+
+function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+}
+
+async function requestExamFullscreen() {
+    const el = document.documentElement;
+    try {
+        if (el.requestFullscreen) {
+            await el.requestFullscreen();
+        } else if (el.webkitRequestFullscreen) {
+            await el.webkitRequestFullscreen();
+        } else if (el.msRequestFullscreen) {
+            await el.msRequestFullscreen();
+        } else {
+            return false;
+        }
+        return isFullscreen();
+    } catch (err) {
+        console.warn('Fullscreen request failed:', err);
+        return false;
+    }
+}
+
+function canLogViolation(type) {
+    const now = Date.now();
+    const last = lastViolationLog[type] || 0;
+    if (now - last < VIOLATION_COOLDOWN_MS) {
+        return false;
+    }
+    lastViolationLog[type] = now;
+    return true;
+}
+
+async function logCheatingEvent(type, detail = '') {
+    if (!sessionId || examSubmitted) return;
+
+    try {
+        await axios.post(LOG_CHEATING_API, {
+            session_id: sessionId,
+            type,
+            detail
+        });
+    } catch (err) {
+        console.error('Failed to log proctoring event:', err);
+    }
+}
+
+async function enterProctorMode() {
+    const entered = await requestExamFullscreen();
+    fullscreenEnforced = entered;
+    proctoringActive = true;
+
+    if (!entered) {
+        if (canLogViolation('FULLSCREEN_DENIED')) {
+            logCheatingEvent('FULLSCREEN_DENIED', 'Initial fullscreen request failed');
+        }
+
+        const result = await Swal.fire({
+            icon: 'warning',
+            title: 'Fullscreen Required',
+            html: `
+                <p>This exam must be taken in <strong>fullscreen mode</strong>.</p>
+                <p class="text-muted small">Exiting fullscreen or switching tabs during the exam will be recorded as a violation.</p>
+            `,
+            confirmButtonText: 'Enter Fullscreen',
+            allowOutsideClick: false,
+            allowEscapeKey: false
+        });
+
+        if (result.isConfirmed) {
+            const retry = await requestExamFullscreen();
+            fullscreenEnforced = retry;
+            if (!retry && canLogViolation('FULLSCREEN_DENIED')) {
+                logCheatingEvent('FULLSCREEN_DENIED', 'User could not enter fullscreen after prompt');
+            }
+        }
+    }
+}
+
+function showProctorWarning(title, message) {
+    Swal.fire({
+        icon: 'warning',
+        title,
+        html: message,
+        confirmButtonText: isFullscreen() ? 'Continue Exam' : 'Return to Fullscreen',
+        allowOutsideClick: false
+    }).then(async (result) => {
+        if (result.isConfirmed && !isFullscreen() && !examSubmitted) {
+            await requestExamFullscreen();
+        }
+    });
+}
+
+function handleFullscreenChange() {
+    if (!proctoringActive || examSubmitted) return;
+
+    if (!isFullscreen()) {
+        if (canLogViolation('FULLSCREEN_EXIT')) {
+            logCheatingEvent('FULLSCREEN_EXIT', 'Trainee exited fullscreen during exam');
+        }
+        showProctorWarning(
+            'Fullscreen Violation',
+            '<p>You exited fullscreen mode. This has been <strong>recorded</strong>.</p><p>Return to fullscreen to continue your exam.</p>'
+        );
+    }
+}
+
+function handleVisibilityChange() {
+    if (!proctoringActive || examSubmitted) return;
+
+    if (document.hidden) {
+        if (canLogViolation('TAB_SWITCH')) {
+            logCheatingEvent('TAB_SWITCH', 'Exam page hidden — possible tab switch');
+        }
+        showProctorWarning(
+            'Tab Switch Detected',
+            '<p>Leaving the exam tab is not allowed. This incident has been <strong>recorded</strong>.</p><p>Return to the exam immediately.</p>'
+        );
+    }
+}
+
+function handleWindowBlur() {
+    if (!proctoringActive || examSubmitted || document.hidden) return;
+
+    if (canLogViolation('WINDOW_BLUR')) {
+        logCheatingEvent('WINDOW_BLUR', 'Exam window lost focus');
+    }
+}
+
+function initProctoring() {
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+}
 
 // Escape HTML
 function escapeHtml(text) {

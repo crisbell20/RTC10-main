@@ -107,20 +107,21 @@ try {
 
         try {
             $stmt = $pdo->query("
-                SELECT 
+                SELECT
                     ci.Incident_ID,
-                    u.Fullname as Trainee_Name,
-                    e.Title as Exam_Name,
-                    ci.Violation_Type,
-                    ci.Detected_Time,
-                    ci.Action_Status
+                    u.Fullname AS Trainee_Name,
+                    e.Title AS Exam_Name,
+                    ci.Reason AS Violation_Type,
+                    ci.Timestamp AS Detected_Time,
+                    ci.Status AS Action_Status
                 FROM tbl_cheating_incident ci
-                INNER JOIN tbl_user u ON ci.User_ID = u.User_ID
-                INNER JOIN tbl_exam e ON ci.Exam_ID = e.Exam_ID
-                ORDER BY ci.Detected_Time DESC
+                INNER JOIN tbl_exam_session es ON ci.Session_ID = es.Session_ID
+                INNER JOIN tbl_user u ON es.User_ID = u.User_ID
+                INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
+                ORDER BY ci.Timestamp DESC
                 LIMIT 10
             ");
-            
+
             $incidents = $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {
             // Query failed, return empty array

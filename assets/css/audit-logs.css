@@ -1,0 +1,55 @@
+.audit-filter-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+}
+
+.audit-table th {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #6b7280;
+    white-space: nowrap;
+}
+
+.audit-table td {
+    vertical-align: middle;
+    font-size: 0.9rem;
+}
+
+.audit-action-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.audit-details-cell {
+    max-width: 320px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.audit-module-badge {
+    font-size: 0.72rem;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+.detail-grid dt {
+    color: #6b7280;
+    font-weight: 600;
+    margin: 0;
+}
+
+.detail-grid dd {
+    margin: 0;
+    word-break: break-word;
+}
