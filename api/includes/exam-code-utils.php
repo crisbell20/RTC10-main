@@ -202,9 +202,34 @@ function computeGradePassingThreshold(float $passingScorePercent): float {
  */
 function getPersonnelRankOptions(): array {
     return [
-        'Pat', 'PCpl', 'PSSg', 'SSg', 'TSg', 'MSg',
-        'PCMS', 'PSMS', 'SMS', 'PCMaj', 'PMaj',
-        'PLt', 'P01Lt', 'P02Lt', 'PCpt', 'PMaj (Comm)',
-        'PLtCol', 'PCol', 'PBGen', 'PMGen', 'PLtGen', 'PGen'
+        'PAT', 'PCPL', 'PSSG', 'PMSG', 'PSMS', 'PCMS',
+        'PEMS', 'PLT', 'PCPT', 'PMAJ', 'PLTCOL',
+        'PCOL', 'PBGEN', 'PMGEN', 'PLTGEN', 'PGEN'
     ];
+}
+
+/**
+ * Normalize rank input to uppercase abbreviation, or null when blank.
+ */
+function normalizePersonnelRank(?string $rank): ?string
+{
+    $normalized = strtoupper(trim((string)$rank));
+    return $normalized !== '' ? $normalized : null;
+}
+
+/**
+ * Validate rank for import/forms. Returns error message or null when valid/empty.
+ */
+function validatePersonnelRank(?string $rank): ?string
+{
+    $normalized = normalizePersonnelRank($rank);
+    if ($normalized === null) {
+        return null;
+    }
+
+    if (!in_array($normalized, getPersonnelRankOptions(), true)) {
+        return 'Invalid personnel rank';
+    }
+
+    return null;
 }

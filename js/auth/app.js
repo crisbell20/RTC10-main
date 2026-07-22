@@ -1,57 +1,48 @@
+const authRequestConfig = {
+    headers: { 'Content-Type': 'application/json' },
+    withCredentials: true,
+};
+
 document.getElementById('loginForm').addEventListener('submit', async function (e) {
     e.preventDefault();
 
-    const emailField = document.getElementById('email');
-    const passwordField = document.getElementById('password');
-    
-    const email = emailField.value.trim();
-    const password = passwordField.value;
-
-    console.log('Login attempt:', { 
-        email, 
-        passwordLength: password.length,
-        passwordFieldExists: !!passwordField,
-        passwordFieldValue: password ? 'HAS_VALUE' : 'EMPTY'
-    });
-
-    if (!email || !password) {
-        Swal.fire('Error', 'Please enter both email and password', 'error');
+    const submitButton = this.querySelector('button[type="submit"]');
+    if (submitButton?.disabled) {
         return;
     }
 
-    // Additional validation
-    if (password.length === 0) {
-        console.error('Password field is empty despite passing validation!');
-        Swal.fire('Error', 'Password field appears empty. Please try typing your password again.', 'error');
+    const identifier = document.getElementById('loginId').value.trim();
+    const password = document.getElementById('password').value;
+
+    if (!identifier || !password) {
+        Swal.fire('Error', 'Please enter your academic number or email and password', 'error');
         return;
     }
+
+    if (submitButton) {
+        submitButton.disabled = true;
+    }
+
+    let awaitingCaptcha = false;
 
     try {
-        // Log what we're sending
-        const payload = {
-            email: email,
-            password: password
-        };
-        console.log('Sending payload:', { 
-            email: payload.email, 
-            passwordLength: payload.password.length,
-            passwordExists: !!payload.password 
-        });
-        
-        const response = await axios.post('api/auth/auth.php', payload, {
-            headers: {
-                'Content-Type': 'application/json'
-            }
-        });
+        const response = await axios.post('api/auth/auth.php', {
+            identifier,
+            password,
+        }, authRequestConfig);
 
         if (response.data.success) {
-            // Check if CAPTCHA is required (Admin/CCMD)
             if (response.data.requires_captcha) {
-                // Generate simple math CAPTCHA
-                const num1 = Math.floor(Math.random() * 10) + 1;
-                const num2 = Math.floor(Math.random() * 10) + 1;
-                const correctAnswer = num1 + num2;
-                
+                const num1 = Number(response.data.captcha_num1);
+                const num2 = Number(response.data.captcha_num2);
+
+                if (!Number.isFinite(num1) || !Number.isFinite(num2)) {
+                    Swal.fire('Error', 'Security verification could not be started. Please try logging in again.', 'error');
+                    return;
+                }
+
+                awaitingCaptcha = true;
+
                 Swal.fire({
                     title: 'Security Verification',
                     html: `
@@ -70,54 +61,55 @@ document.getElementById('loginForm').addEventListener('submit', async function (
                     confirmButtonColor: '#2563eb',
                     allowOutsideClick: false,
                     preConfirm: () => {
-                        const answer = document.getElementById('captchaAnswer').value;
-                        if (!answer) {
+                        const raw = document.getElementById('captchaAnswer').value;
+                        if (raw === null || String(raw).trim() === '') {
                             Swal.showValidationMessage('Please enter an answer');
                             return false;
                         }
-                        if (parseInt(answer) !== correctAnswer) {
-                            Swal.showValidationMessage('Incorrect answer. Please try again.');
+                        const parsed = parseInt(String(raw).trim(), 10);
+                        if (Number.isNaN(parsed)) {
+                            Swal.showValidationMessage('Please enter a valid number');
                             return false;
                         }
-                        return true;
-                    }
+                        return parsed;
+                    },
                 }).then(async (result) => {
-                    if (result.isConfirmed) {
-                        // CAPTCHA passed, complete login
-                        try {
-                            await axios.post('api/auth/verify-captcha.php', {
-                                user_id: response.data.user.id
-                            });
-                            
-                            Swal.fire({
-                                icon: 'success',
-                                title: 'Verified!',
-                                text: 'Login successful',
-                                timer: 1500,
-                                showConfirmButton: false
-                            }).then(() => {
-                                const role = response.data.user.role;
-                                switch (role) {
-                                    case 'Admin':
-                                        window.location.href = 'html/admin/dashboard.php';
-                                        break;
-                                    case 'CCMD':
-                                        window.location.href = 'html/ccmd/dashboard.php';
-                                        break;
-                                    default:
-                                        window.location.href = 'html/examinee/dashboard.php';
-                                }
-                            });
-                        } catch (error) {
-                            Swal.fire('Error', 'Verification failed', 'error');
-                        }
-                    } else {
-                        // User cancelled
+                    if (!result.isConfirmed) {
                         Swal.fire('Cancelled', 'Login cancelled', 'info');
+                        return;
+                    }
+
+                    try {
+                        await axios.post('api/auth/verify-captcha.php', {
+                            answer: result.value,
+                        }, authRequestConfig);
+
+                        Swal.fire({
+                            icon: 'success',
+                            title: 'Verified!',
+                            text: 'Login successful',
+                            timer: 1500,
+                            showConfirmButton: false,
+                        }).then(() => {
+                            const role = response.data.user.role;
+                            if (role === 'Admin') {
+                                window.location.href = 'html/admin/dashboard.php';
+                            } else if (role === 'CCMD') {
+                                window.location.href = 'html/ccmd/dashboard.php';
+                            } else {
+                                window.location.href = 'html/examinee/dashboard.php';
+                            }
+                        });
+                    } catch (error) {
+                        const msg = error.response?.data?.message || 'Verification failed';
+                        Swal.fire('Error', msg, 'error');
+                    }
+                }).finally(() => {
+                    if (submitButton) {
+                        submitButton.disabled = false;
                     }
                 });
             } else {
-                // No CAPTCHA required (Examinee)
                 Swal.fire('Success', 'Login successful', 'success').then(() => {
                     window.location.href = 'html/examinee/dashboard.php';
                 });
@@ -128,6 +120,9 @@ document.getElementById('loginForm').addEventListener('submit', async function (
     } catch (error) {
         const msg = error.response?.data?.message || error.message || 'An error occurred during login';
         Swal.fire('Error', msg, 'error');
-        console.error('Login error:', error.response?.data || error);
+    } finally {
+        if (submitButton && !awaitingCaptcha) {
+            submitButton.disabled = false;
+        }
     }
 });

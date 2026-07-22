@@ -1,3 +1,14 @@
+<?php
+session_start();
+
+if (!isset($_SESSION['user_id']) || ($_SESSION['user_role'] ?? '') !== 'Examinee') {
+    header('Location: ../../login.php');
+    exit;
+}
+
+$watermarkName = $_SESSION['user_name'] ?? 'Examinee';
+$watermarkAcademic = $_SESSION['user_academic_number'] ?? '';
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,9 +18,11 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
     <link rel="stylesheet" href="../../assets/css/custom.css">
-    <link rel="stylesheet" href="../../assets/css/exam.css">
+    <link rel="stylesheet" href="../../assets/css/exam.css?v=2">
+    <link rel="stylesheet" href="../../assets/css/examinee-responsive.css?v=4">
+    <link rel="stylesheet" href="../../assets/css/examinee-watermark.css?v=1">
 </head>
-<body>
+<body class="examinee-exam">
     <div id="loadingOverlay" class="loading-overlay">
         <div class="text-center">
             <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;" role="status">
@@ -22,7 +35,7 @@
     <div class="exam-container" id="examContainer" style="display: none;">
         <div class="exam-proctor-notice">
             <i class="bi bi-shield-exclamation me-1"></i>
-            <strong>Proctored exam:</strong> Stay in fullscreen. Tab switches and fullscreen exits are recorded and visible to proctors.
+            <strong>Proctored exam:</strong> Stay in fullscreen. Tab switches and copy/paste are logged. Content is watermarked.
         </div>
         <div class="exam-header">
             <div class="d-flex justify-content-between align-items-center">
@@ -33,7 +46,7 @@
                 <div class="text-end">
                     <div class="timer" id="timer">00:00:00</div>
                     <small>Time Remaining</small>
-                    <div class="mt-2" id="deadlineInfo" style="font-size: 0.85rem; color: #6c757d;">
+                    <div class="mt-2" id="deadlineInfo">
                         <i class="bi bi-calendar-event"></i> <span id="deadlineText"></span>
                     </div>
                 </div>
@@ -46,7 +59,10 @@
             </small>
         </div>
 
-        <div id="questionsContainer"></div>
+        <div id="questionsArea" class="watermark-shield">
+            <div id="examWatermarkLayer" class="exam-watermark-layer" aria-hidden="true"></div>
+            <div id="questionsContainer"></div>
+        </div>
 
         <div class="nav-buttons">
             <div class="d-flex justify-content-between align-items-center">
@@ -66,9 +82,25 @@
         </div>
     </div>
 
+    <script>
+        window.EXAM_WATERMARK = <?= json_encode([
+            'name' => $watermarkName,
+            'academic_number' => $watermarkAcademic,
+            'session_id' => null,
+        ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+    </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
-    <script src="../../js/student/exam.js?v=4"></script>
+    <script src="../../js/student/exam.js?v=16"></script>
+    <script>
+        (function () {
+            const params = new URLSearchParams(window.location.search);
+            const sid = params.get('session_id');
+            if (window.EXAM_WATERMARK && sid) {
+                window.EXAM_WATERMARK.session_id = sid;
+            }
+        })();
+    </script>
 </body>
 </html>

@@ -9,6 +9,10 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 }
 
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/batch-enrollment-utils.php';
+require_once __DIR__ . '/../includes/audit-log-utils.php';
+require_once __DIR__ . '/../includes/archive-utils.php';
+require_once __DIR__ . '/../includes/validation-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -86,6 +90,12 @@ try {
                 exit;
             }
 
+            if (sectionNameExistsInBatch($pdo, (int)$batch_id, $section_name)) {
+                http_response_code(409);
+                echo json_encode(['success' => false, 'message' => 'A section with this name already exists in this batch']);
+                exit;
+            }
+
             $stmt = $pdo->prepare('INSERT INTO tbl_academic_section (Batch_ID, Section_Name, Capacity) VALUES (?, ?, ?)');
             $stmt->execute([$batch_id, $section_name, $capacity]);
             $section_id = (int)$pdo->lastInsertId();
@@ -141,6 +151,12 @@ try {
             $batch_id = $pdo->lastInsertId();
         } else {
             $batch_id = $batch['Batch_ID'];
+        }
+
+        if (sectionNameExistsInBatch($pdo, (int)$batch_id, $section_name)) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => 'A section with this name already exists in this batch']);
+            exit;
         }
 
         $stmt = $pdo->prepare('INSERT INTO tbl_academic_section (Batch_ID, Section_Name, Capacity) VALUES (?, ?, ?)');
@@ -204,6 +220,15 @@ try {
             exit;
         }
 
+        $parentBatchStmt = $pdo->prepare('SELECT Batch_ID FROM tbl_academic_section WHERE Section_ID = ?');
+        $parentBatchStmt->execute([$section_id]);
+        $parentBatchId = (int)$parentBatchStmt->fetchColumn();
+        if ($parentBatchId > 0 && sectionNameExistsInBatch($pdo, $parentBatchId, $section_name, (int)$section_id)) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => 'A section with this name already exists in this batch']);
+            exit;
+        }
+
         $stmt = $pdo->prepare('UPDATE tbl_academic_section SET Section_Name = ?, Capacity = ? WHERE Section_ID = ?');
         $stmt->execute([$section_name, $capacity, $section_id]);
 
@@ -212,22 +237,84 @@ try {
         exit;
     }
 
-    // Delete section
-    if ($request_method === 'POST' && $action === 'delete') {
-        $section_id = $input['section_id'] ?? $_POST['section_id'] ?? '';
-
-        if (empty($section_id)) {
+    // Archive section
+    if ($request_method === 'POST' && $action === 'archive') {
+        $section_id = (int)($input['section_id'] ?? $_POST['section_id'] ?? 0);
+        if ($section_id <= 0) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Section ID is required']);
             exit;
         }
 
-        $stmt = $pdo->prepare('DELETE FROM tbl_academic_section WHERE Section_ID = ?');
-        $stmt->execute([$section_id]);
+        $enrolledCount = sectionHasEnrolledTrainees($pdo, $section_id);
+        if ($enrolledCount > 0) {
+            http_response_code(409);
+            echo json_encode([
+                'success' => false,
+                'message' => "Cannot archive section while {$enrolledCount} trainee(s) are still enrolled. Remove assignments first.",
+            ]);
+            exit;
+        }
 
+        if (!archiveRecord($pdo, 'tbl_academic_section', 'Section_ID', $section_id)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Unable to archive section. Run the archive migration first.']);
+            exit;
+        }
+
+        auditFromSession($pdo, 'SECTION', 'ARCHIVE_SECTION', "Section {$section_id} archived", 'SUCCESS', 'section', $section_id);
         http_response_code(200);
-        echo json_encode(['success' => true, 'message' => 'Section deleted successfully']);
+        echo json_encode(['success' => true, 'message' => 'Section archived successfully']);
         exit;
+    }
+
+    if ($request_method === 'POST' && $action === 'restore') {
+        $section_id = (int)($input['section_id'] ?? $_POST['section_id'] ?? 0);
+        if ($section_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Section ID is required']);
+            exit;
+        }
+
+        $metaStmt = $pdo->prepare('
+            SELECT sec.Section_ID, sec.Batch_ID, b.Course_ID
+            FROM tbl_academic_section sec
+            INNER JOIN tbl_batch b ON sec.Batch_ID = b.Batch_ID
+            WHERE sec.Section_ID = ?
+            LIMIT 1
+        ');
+        $metaStmt->execute([$section_id]);
+        $meta = $metaStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$meta) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Section not found']);
+            exit;
+        }
+
+        if (!restoreRecord($pdo, 'tbl_academic_section', 'Section_ID', $section_id)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => restoreFailureMessage($pdo, 'tbl_academic_section', 'Section_ID', $section_id, 'section')]);
+            exit;
+        }
+
+        $ancestors = restoreCurriculumAncestors($pdo, (int)$meta['Batch_ID'], (int)$meta['Course_ID']);
+
+        auditFromSession($pdo, 'SECTION', 'RESTORE_SECTION', "Section {$section_id} restored", 'SUCCESS', 'section', $section_id);
+
+        $message = 'Section restored successfully';
+        if (!empty($ancestors)) {
+            $message = 'Section restored successfully (parent ' . implode(' and ', $ancestors) . ' also restored). Other sections in this batch remain archived until restored individually.';
+        } else {
+            $message = 'Section restored successfully. Other sections in this batch remain archived until restored individually.';
+        }
+
+        echo json_encode(['success' => true, 'message' => $message]);
+        exit;
+    }
+
+    if ($request_method === 'POST' && $action === 'delete') {
+        archiveDeletionBlockedResponse();
     }
 
     http_response_code(400);

@@ -20,6 +20,7 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/audit-log-utils.php';
+require_once __DIR__ . '/../includes/question-publish-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -41,13 +42,36 @@ try {
             exit;
         }
 
-        // Verify exam exists
-        $stmt = $pdo->prepare('SELECT Exam_ID FROM tbl_exam WHERE Exam_ID = ?');
+        // Verify exam exists and get its subject
+        $stmt = $pdo->prepare('SELECT Exam_ID, Subject_ID FROM tbl_exam WHERE Exam_ID = ?');
         $stmt->execute([$exam_id]);
-        if (!$stmt->fetch()) {
+        $exam = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$exam) {
             http_response_code(404);
             echo json_encode(['success' => false, 'message' => 'Exam not found']);
             exit;
+        }
+
+        if (!empty($question_ids)) {
+            $examSubjectId = (int)$exam['Subject_ID'];
+            $placeholders = implode(',', array_fill(0, count($question_ids), '?'));
+            $checkStmt = $pdo->prepare("
+                SELECT COUNT(*) FROM tbl_question_bank
+                WHERE Question_ID IN ({$placeholders}) AND Subject_ID = ?
+            ");
+            $params = array_map('intval', $question_ids);
+            $params[] = $examSubjectId;
+            $checkStmt->execute($params);
+            $validCount = (int)$checkStmt->fetchColumn();
+
+            if ($validCount !== count($question_ids)) {
+                http_response_code(400);
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'All questions must belong to the exam\'s subject',
+                ]);
+                exit;
+            }
         }
 
         $pdo->beginTransaction();
@@ -68,7 +92,10 @@ try {
 
         $pdo->commit();
 
-        auditFromSession($pdo, 'EXAM', 'ASSIGN_EXAM_QUESTIONS', count($question_ids) . " questions assigned to exam {$exam_id}", 'SUCCESS', 'exam', (int)$exam_id);
+        cleanupOrphanUnpublishedQuestions($pdo);
+
+        $examLabel = auditExamLabel($pdo, (int)$exam_id);
+        auditFromSession($pdo, 'EXAM', 'ASSIGN_EXAM_QUESTIONS', count($question_ids) . " questions assigned to exam {$examLabel}", 'SUCCESS', 'exam', (int)$exam_id);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Questions assigned successfully', 'count' => count($question_ids)]);
@@ -94,6 +121,8 @@ try {
             exit;
         }
 
+        $publishedSelect = questionPublishedColumnExists($pdo) ? ', q.Is_Published' : '';
+
         $stmt = $pdo->prepare('
             SELECT 
                 eq.Exam_Question_ID,
@@ -103,6 +132,7 @@ try {
                 q.Question_Type,
                 s.Subject_Name,
                 s.Subject_ID
+                ' . $publishedSelect . '
             FROM tbl_exam_question eq
             INNER JOIN tbl_question_bank q ON eq.Question_ID = q.Question_ID
             INNER JOIN tbl_subject s ON q.Subject_ID = s.Subject_ID
@@ -138,6 +168,35 @@ try {
         if (empty($question_ids) || !is_array($question_ids)) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Question IDs are required']);
+            exit;
+        }
+
+        $stmt = $pdo->prepare('SELECT Subject_ID FROM tbl_exam WHERE Exam_ID = ?');
+        $stmt->execute([$exam_id]);
+        $exam = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$exam) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Exam not found']);
+            exit;
+        }
+
+        $examSubjectId = (int)$exam['Subject_ID'];
+        $placeholders = implode(',', array_fill(0, count($question_ids), '?'));
+        $checkStmt = $pdo->prepare("
+            SELECT COUNT(*) FROM tbl_question_bank
+            WHERE Question_ID IN ({$placeholders}) AND Subject_ID = ?
+        ");
+        $params = array_map('intval', $question_ids);
+        $params[] = $examSubjectId;
+        $checkStmt->execute($params);
+        $validCount = (int)$checkStmt->fetchColumn();
+
+        if ($validCount !== count($question_ids)) {
+            http_response_code(400);
+            echo json_encode([
+                'success' => false,
+                'message' => 'All questions must belong to the exam\'s subject',
+            ]);
             exit;
         }
 

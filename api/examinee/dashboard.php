@@ -9,6 +9,9 @@ session_start();
 
 require_once '../config/connection-pdo.php';
 require_once '../includes/exam-code-utils.php';
+require_once '../includes/exam-participant-utils.php';
+require_once '../includes/validation-utils.php';
+require_once '../includes/exam-deadline-finalize-utils.php';
 
 /**
  * Send success response
@@ -54,6 +57,12 @@ function validateExamineeSession() {
 // Validate session
 $userId = validateExamineeSession();
 
+try {
+    runOverdueExamFinalizationOnce($pdo);
+} catch (Exception $e) {
+    error_log('Auto-finalize exams error: ' . $e->getMessage());
+}
+
 // Get action parameter
 $action = $_GET['action'] ?? 'statistics';
 
@@ -98,16 +107,23 @@ function getDashboardStatistics($pdo, $userId) {
     $availableQuery = "
         SELECT COUNT(DISTINCT e.Exam_ID) as count
         FROM tbl_exam e
+        INNER JOIN tbl_exam_batch eb ON e.Exam_ID = eb.Exam_ID
+        INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
+        INNER JOIN tbl_user_batch ub ON b.Batch_ID = ub.Batch_ID
         WHERE e.Status = 'Published'
-        AND e.Exam_ID NOT IN (
-            SELECT es.Exam_ID 
-            FROM tbl_exam_session es 
-            WHERE es.User_ID = ? 
-            AND es.Time_Ended IS NOT NULL
+        AND ub.User_ID = ?
+        AND ub.Status = 'Active'
+        AND NOT EXISTS (
+            SELECT 1
+            FROM tbl_exam_session es_done
+            INNER JOIN tbl_result r ON r.Session_ID = es_done.Session_ID
+            WHERE es_done.Exam_ID = e.Exam_ID
+              AND es_done.User_ID = ?
+              AND es_done.Time_Ended IS NOT NULL
         )
     ";
     $stmt = $pdo->prepare($availableQuery);
-    $stmt->execute([$userId]);
+    $stmt->execute([$userId, $userId]);
     $availableCount = $stmt->fetch()['count'] ?? 0;
     
     // Count completed exams
@@ -121,30 +137,34 @@ function getDashboardStatistics($pdo, $userId) {
     $stmt->execute([$userId]);
     $completedCount = $stmt->fetch()['count'] ?? 0;
     
-    // Calculate average score and learning points
+    // Calculate average score and pass/fail counts
     $scoresQuery = "
         SELECT 
             AVG(r.Percentage) as avg_score,
-            SUM(r.Percentage) as learning_points
+            SUM(CASE WHEN r.Percentage >= e.Passing_Score THEN 1 ELSE 0 END) AS passed_count,
+            SUM(CASE WHEN r.Percentage < e.Passing_Score THEN 1 ELSE 0 END) AS failed_count
         FROM tbl_result r
         INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
+        INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
         WHERE es.User_ID = ?
+        AND es.Time_Ended IS NOT NULL
         AND r.Percentage IS NOT NULL
-        AND r.Percentage > 0
     ";
     $stmt = $pdo->prepare($scoresQuery);
     $stmt->execute([$userId]);
     $scores = $stmt->fetch();
     
     $averageScore = $scores['avg_score'] ?? 0;
-    $learningPoints = $scores['learning_points'] ?? 0;
+    $passedCount = (int)($scores['passed_count'] ?? 0);
+    $failedCount = (int)($scores['failed_count'] ?? 0);
     
     // Format response
     $statistics = [
         'exams_available' => (int)$availableCount,
         'exams_completed' => (int)$completedCount,
+        'passed_count' => $passedCount,
+        'failed_count' => $failedCount,
         'average_score' => round((float)$averageScore, 1),
-        'learning_points' => round((float)$learningPoints, 0),
         'completion_rate' => $availableCount > 0 
             ? round(($completedCount / ($completedCount + $availableCount)) * 100, 1) 
             : 0
@@ -157,20 +177,6 @@ function getDashboardStatistics($pdo, $userId) {
  * Get available exams
  */
 function getAvailableExams($pdo, $userId) {
-    // Auto-close exams that are past deadline + 30 minutes
-    try {
-        $closeQuery = "
-            UPDATE tbl_exam 
-            SET Status = 'Closed' 
-            WHERE Status = 'Published' 
-            AND Deadline IS NOT NULL 
-            AND DATE_ADD(Deadline, INTERVAL 30 MINUTE) < NOW()
-        ";
-        $pdo->exec($closeQuery);
-    } catch (PDOException $e) {
-        error_log("Auto-close exams error: " . $e->getMessage());
-    }
-    
     $hasExamCode = false;
     try {
         $colCheck = $pdo->query("SHOW COLUMNS FROM tbl_exam LIKE 'Exam_Code'");
@@ -181,6 +187,20 @@ function getAvailableExams($pdo, $userId) {
 
     $codeSelect = $hasExamCode ? 'e.Exam_Code,' : '';
     $archivedFilter = $hasExamCode ? 'AND (e.Is_Archived = 0 OR e.Is_Archived IS NULL)' : '';
+    $participantFilter = '';
+    $queryParams = [$userId, $userId, $userId];
+
+    if (examParticipantTableExists($pdo)) {
+        $participantFilter = "
+        AND (
+            NOT EXISTS (SELECT 1 FROM tbl_exam_participant ep_all WHERE ep_all.Exam_ID = e.Exam_ID)
+            OR EXISTS (
+                SELECT 1 FROM tbl_exam_participant ep_user
+                WHERE ep_user.Exam_ID = e.Exam_ID AND ep_user.User_ID = ?
+            )
+        )";
+        $queryParams[] = $userId;
+    }
 
     $query = "
         SELECT DISTINCT
@@ -204,18 +224,26 @@ function getAvailableExams($pdo, $userId) {
         INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
         INNER JOIN tbl_user_batch ub ON b.Batch_ID = ub.Batch_ID
         LEFT JOIN tbl_exam_question eq ON e.Exam_ID = eq.Exam_ID
-        LEFT JOIN tbl_exam_session es ON e.Exam_ID = es.Exam_ID AND es.User_ID = ?
+        LEFT JOIN tbl_exam_session es ON e.Exam_ID = es.Exam_ID AND es.User_ID = ? AND es.Time_Ended IS NULL
         WHERE e.Status = 'Published'
         {$archivedFilter}
         AND ub.User_ID = ?
         AND ub.Status = 'Active'
-        AND (es.Session_ID IS NULL OR es.Time_Ended IS NULL)
+        {$participantFilter}
+        AND NOT EXISTS (
+            SELECT 1
+            FROM tbl_exam_session es_done
+            INNER JOIN tbl_result r ON r.Session_ID = es_done.Session_ID
+            WHERE es_done.Exam_ID = e.Exam_ID
+              AND es_done.User_ID = ?
+              AND es_done.Time_Ended IS NOT NULL
+        )
         GROUP BY e.Exam_ID
         ORDER BY e.Deadline ASC, e.Schedule_Date ASC
     ";
     
     $stmt = $pdo->prepare($query);
-    $stmt->execute([$userId, $userId]);
+    $stmt->execute($queryParams);
     $exams = $stmt->fetchAll();
     
     // Format dates and calculate status
@@ -246,6 +274,7 @@ function getAvailableExams($pdo, $userId) {
         }
 
         $exam['requires_exam_code'] = $hasExamCode && !empty($exam['Exam_Code']);
+        $exam['schedule_locked'] = validateExamScheduleStarted($exam) !== null;
         unset($exam['Exam_Code']);
     }
     

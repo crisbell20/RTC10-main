@@ -62,3 +62,98 @@ body {
 .text-white-50 {
     color: rgba(255, 255, 255, 0.5) !important;
 }
+
+/* Login page — mobile */
+.login-page {
+    min-height: 100vh;
+    min-height: 100dvh;
+}
+
+.login-brand-panel {
+    background-color: #1a3a52;
+}
+
+.login-badge-wrap {
+    position: relative;
+    width: 200px;
+    height: 220px;
+    margin: 0 auto;
+}
+
+.login-badge-circle {
+    width: 200px;
+    height: 220px;
+    border-radius: 50%;
+    background-color: white;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    padding: 10px;
+}
+
+.login-badge-img {
+    height: 168px;
+    object-fit: contain;
+}
+
+.login-form-panel {
+    background: #fff;
+}
+
+.login-form-container .form-control,
+.login-form-container .form-control.border-bottom {
+    font-size: 16px;
+}
+
+.login-form-container .btn[type="submit"],
+.login-form-container #togglePassword {
+    min-height: 44px;
+}
+
+@media (max-width: 767.98px) {
+    .login-page .row.g-0 {
+        min-height: 100vh;
+        min-height: 100dvh;
+    }
+
+    .login-brand-panel {
+        padding: 1.5rem 1rem !important;
+        min-height: auto;
+    }
+
+    .login-badge-wrap {
+        width: 120px;
+        height: 132px;
+    }
+
+    .login-badge-circle {
+        width: 120px;
+        height: 132px;
+    }
+
+    .login-badge-img {
+        height: 96px;
+    }
+
+    .login-brand-panel h2 {
+        font-size: 1.15rem;
+    }
+
+    .login-brand-panel p {
+        font-size: 0.85rem;
+        margin-bottom: 0;
+    }
+
+    .login-form-panel {
+        flex: 1;
+        align-items: flex-start !important;
+        padding-top: 1.5rem;
+        padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+    }
+
+    .login-form-container {
+        padding: 1.5rem !important;
+    }
+}

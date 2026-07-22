@@ -1,0 +1,633 @@
+/**
+ * Examinee portal — mobile & tablet responsive styles only.
+ * Scoped to body.examinee-portal and body.examinee-exam so admin/CCMD layouts are unchanged.
+ */
+
+/* ─── Dashboard layout (examinee portal pages) ─── */
+
+@media (max-width: 991.98px) {
+    body.examinee-portal {
+        overflow-x: hidden;
+    }
+
+    body.examinee-portal .top-nav {
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.75rem 1rem;
+        padding-top: max(0.75rem, env(safe-area-inset-top));
+        padding-left: max(1rem, env(safe-area-inset-left));
+        padding-right: max(1rem, env(safe-area-inset-right));
+    }
+
+    body.examinee-portal .nav-brand {
+        flex: 1;
+        min-width: 0;
+    }
+
+    body.examinee-portal .nav-brand h5 {
+        font-size: 0.95rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    body.examinee-portal .nav-brand p {
+        display: none;
+    }
+
+    body.examinee-portal .nav-user span,
+    body.examinee-portal .nav-user .nav-user-name {
+        display: inline-block;
+        max-width: 120px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.85rem;
+    }
+
+    body.examinee-portal .dashboard-container {
+        flex-direction: row;
+        position: relative;
+    }
+
+    /* Override dashboard.css horizontal sidebar strip */
+    body.examinee-portal .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 260px;
+        max-width: min(85vw, 280px);
+        height: 100vh;
+        height: 100dvh;
+        z-index: 1050;
+        transform: translateX(-100%);
+        transition: transform 0.28s ease;
+        border-right: 1px solid var(--border-color);
+        border-bottom: none;
+        max-height: none;
+        overflow-x: hidden;
+        overflow-y: auto;
+        padding-top: 0.5rem;
+        display: block;
+        align-self: auto;
+    }
+
+    body.examinee-portal.sidebar-open .sidebar {
+        transform: translateX(0);
+        box-shadow: 4px 0 24px rgba(0, 0, 0, 0.12);
+    }
+
+    body.examinee-portal .sidebar-menu {
+        display: block;
+        width: 100%;
+        flex-direction: column;
+    }
+
+    body.examinee-portal .sidebar-menu li {
+        flex: none;
+    }
+
+    body.examinee-portal .sidebar-menu a {
+        flex-direction: row;
+        justify-content: flex-start;
+        text-align: left;
+        padding: 0.85rem 1.25rem;
+        font-size: 0.95rem;
+        min-height: 48px;
+    }
+
+    body.examinee-portal .main-content {
+        flex: 1;
+        width: 100%;
+        min-width: 0;
+        padding: 1rem;
+    }
+
+    body.examinee-portal .page-header h2 {
+        font-size: 1.35rem;
+    }
+
+    body.examinee-portal .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    body.examinee-portal .stat-card {
+        padding: 0.65rem 0.75rem;
+    }
+
+    body.examinee-portal .stat-header {
+        margin-bottom: 0.35rem;
+    }
+
+    body.examinee-portal .stat-icon {
+        width: 28px;
+        height: 28px;
+        font-size: 0.95rem;
+        border-radius: 0.375rem;
+    }
+
+    body.examinee-portal .stat-label {
+        font-size: 0.65rem;
+    }
+
+    body.examinee-portal .stat-value {
+        font-size: 1.2rem;
+        margin-bottom: 0.1rem;
+    }
+
+    body.examinee-portal .stat-footer {
+        font-size: 0.7rem;
+    }
+
+    body.examinee-portal .section-header {
+        flex-wrap: wrap;
+        padding: 1rem;
+    }
+
+    body.examinee-portal .section-body {
+        padding: 0.75rem;
+    }
+
+    body.examinee-portal .btn,
+    body.examinee-portal .btn-logout {
+        min-height: 44px;
+    }
+
+    body.examinee-portal .form-control,
+    body.examinee-portal .form-select {
+        font-size: 16px;
+    }
+}
+
+@media (max-width: 575.98px) {
+    body.examinee-portal .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.4rem;
+    }
+
+    body.examinee-portal .stat-value {
+        font-size: 1.1rem;
+    }
+
+    body.examinee-portal .main-content {
+        padding: 0.75rem;
+    }
+}
+
+@media (max-width: 767.98px) {
+    body.examinee-portal .examinee-desktop-table {
+        display: none;
+    }
+
+    body.examinee-portal .examinee-mobile-cards {
+        display: block;
+    }
+}
+
+@media (min-width: 768px) {
+    body.examinee-portal .examinee-mobile-cards {
+        display: none;
+    }
+
+    body.examinee-portal .examinee-desktop-table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    body.examinee-portal .examinee-desktop-table .table {
+        min-width: 640px;
+    }
+}
+
+/* Mobile dashboard cards */
+.examinee-mobile-cards {
+    display: none;
+}
+
+.examinee-desktop-table {
+    display: block;
+}
+
+.examinee-data-card {
+    background: #fff;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.examinee-clickable-card {
+    cursor: pointer;
+    transition: box-shadow 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.examinee-clickable-card:hover {
+    border-color: var(--secondary-color, #2563eb);
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.12);
+}
+
+.examinee-clickable-card:active {
+    transform: scale(0.99);
+}
+
+.examinee-clickable-row {
+    cursor: pointer;
+}
+
+.examinee-clickable-row:hover {
+    background: rgba(37, 99, 235, 0.04);
+}
+
+.examinee-data-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.examinee-data-card-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.35;
+    flex: 1;
+    min-width: 0;
+}
+
+.examinee-data-card-desc {
+    font-size: 0.875rem;
+    color: #6b7280;
+    margin-bottom: 0.75rem;
+    line-height: 1.45;
+}
+
+.examinee-data-card-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 1rem;
+    margin: 0;
+}
+
+.examinee-data-card-meta div {
+    min-width: 0;
+}
+
+.examinee-data-card-meta-wide {
+    grid-column: 1 / -1;
+}
+
+.examinee-data-card-meta dt {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #9ca3af;
+    margin-bottom: 0.1rem;
+}
+
+.examinee-data-card-meta dd {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #374151;
+    word-break: break-word;
+}
+
+.examinee-empty-state {
+    text-align: center;
+    color: #6b7280;
+    padding: 2rem 1rem;
+}
+
+.examinee-empty-state i {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+.examinee-empty-state p {
+    margin: 0;
+}
+
+/* Bottom tab navigation (mobile/tablet) */
+.examinee-bottom-nav {
+    display: none;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1030;
+    background: #fff;
+    border-top: 1px solid var(--border-color, #e5e7eb);
+    padding-bottom: env(safe-area-inset-bottom);
+    box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
+}
+
+.examinee-bottom-nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    min-height: 56px;
+    padding: 0.35rem 0.25rem;
+    color: #6b7280;
+    text-decoration: none;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition: color 0.15s, background 0.15s;
+}
+
+.examinee-bottom-nav-item i {
+    font-size: 1.25rem;
+    line-height: 1;
+}
+
+.examinee-bottom-nav-item.active {
+    color: var(--primary-color, #1a3a52);
+}
+
+.examinee-bottom-nav-item:active {
+    background: rgba(26, 58, 82, 0.06);
+}
+
+@media (max-width: 991.98px) {
+    body.examinee-portal .examinee-bottom-nav {
+        display: flex;
+    }
+
+    body.examinee-portal .examinee-nav-toggle {
+        display: none !important;
+    }
+
+    body.examinee-portal .sidebar {
+        display: none;
+    }
+
+    body.examinee-portal .main-content {
+        padding-bottom: calc(4.75rem + env(safe-area-inset-bottom));
+    }
+
+    body.examinee-portal .result-card {
+        padding: 1rem;
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    body.examinee-portal .result-card-disabled {
+        cursor: default;
+        opacity: 0.92;
+    }
+
+    body.examinee-portal .result-card .min-w-0 {
+        min-width: 0;
+    }
+
+    body.examinee-portal .result-card .d-flex.gap-3 {
+        flex-direction: column;
+        gap: 0.35rem !important;
+        font-size: 0.875rem;
+    }
+
+    body.examinee-portal .result-card h3 {
+        font-size: 1.5rem;
+    }
+
+    body.examinee-portal .subject-highlight-item {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 0.5rem;
+    }
+
+    body.examinee-portal .subject-highlight-item .text-end {
+        text-align: left !important;
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+    }
+
+    body.examinee-portal .exam-attempt-row {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 0.5rem;
+    }
+
+    body.examinee-portal .exam-attempt-row .text-end {
+        text-align: left !important;
+        width: 100%;
+    }
+
+    body.examinee-portal .perf-page-header {
+        flex-direction: column;
+        align-items: stretch !important;
+    }
+
+    body.examinee-portal .perf-filters {
+        width: 100%;
+    }
+
+    body.examinee-portal #subjectDetailModal .modal-dialog {
+        margin: 0.5rem;
+        max-width: calc(100% - 1rem);
+    }
+}
+
+/* Hamburger toggle (injected by examinee-responsive-nav.js) */
+.examinee-nav-toggle {
+    display: none;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 0.375rem;
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.examinee-nav-toggle:hover {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.examinee-nav-toggle i {
+    font-size: 1.35rem;
+}
+
+@media (max-width: 991.98px) {
+    body.examinee-portal .examinee-nav-toggle {
+        display: inline-flex;
+    }
+}
+
+.examinee-sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 1040;
+    opacity: 0;
+    transition: opacity 0.28s ease;
+}
+
+body.examinee-portal.sidebar-open .examinee-sidebar-backdrop {
+    display: block;
+    opacity: 1;
+}
+
+body.examinee-portal.sidebar-open {
+    overflow: hidden;
+}
+
+/* Result pages */
+@media (max-width: 767.98px) {
+    body.examinee-portal .result-summary {
+        padding: 1.25rem !important;
+    }
+
+    body.examinee-portal .result-summary .d-flex.justify-content-between {
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+
+    body.examinee-portal .result-summary .row.g-3 > [class*="col-"] {
+        flex: 0 0 50%;
+        max-width: 50%;
+    }
+
+    body.examinee-portal .question-card {
+        padding: 1rem;
+    }
+}
+
+@media (max-width: 575.98px) {
+    body.examinee-portal .result-summary .row.g-3 > [class*="col-"] {
+        flex: 0 0 100%;
+        max-width: 100%;
+    }
+}
+
+/* ─── Exam taking page ─── */
+
+@media (max-width: 991.98px) {
+    body.examinee-exam {
+        overflow-x: hidden;
+    }
+
+    body.examinee-exam .exam-container {
+        padding: 12px;
+        padding-bottom: 100px;
+        max-width: 100%;
+    }
+
+    body.examinee-exam .exam-proctor-notice {
+        font-size: 0.8rem;
+        padding: 0.5rem 0.75rem;
+    }
+
+    body.examinee-exam .exam-header {
+        padding: 1rem;
+        margin-bottom: 1rem;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+    }
+
+    body.examinee-exam .exam-header h2 {
+        font-size: 1.15rem;
+        line-height: 1.3;
+    }
+
+    body.examinee-exam .exam-header .timer {
+        font-size: 1.25rem;
+    }
+
+    body.examinee-exam .question-card {
+        padding: 1.15rem;
+        margin-bottom: 1rem;
+    }
+
+    body.examinee-exam .choice-option {
+        min-height: 48px;
+        padding: 14px 16px;
+        display: flex;
+        align-items: center;
+    }
+
+    body.examinee-exam .nav-buttons {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        margin: 0;
+        border-radius: 0;
+        padding: 12px 16px;
+        padding-bottom: max(12px, env(safe-area-inset-bottom));
+        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.1);
+    }
+
+    body.examinee-exam .nav-buttons .btn {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    body.examinee-exam .nav-buttons .d-flex {
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        justify-content: center !important;
+    }
+
+    body.examinee-exam .nav-buttons .text-muted {
+        order: -1;
+        width: 100%;
+        text-align: center;
+        font-size: 0.85rem;
+        margin-bottom: 0.25rem;
+    }
+}
+
+@media (max-width: 575.98px) {
+    body.examinee-exam .exam-header .d-flex.justify-content-between {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 0.75rem;
+    }
+
+    body.examinee-exam .exam-header .text-end {
+        text-align: left !important;
+        width: 100%;
+    }
+
+    body.examinee-exam .nav-buttons #prevBtn,
+    body.examinee-exam .nav-buttons #nextBtn,
+    body.examinee-exam .nav-buttons #submitBtn {
+        flex: 1 1 auto;
+    }
+}
+
+@media (max-width: 991.98px) and (orientation: landscape) {
+    body.examinee-exam .exam-header {
+        padding: 0.65rem 1rem;
+    }
+
+    body.examinee-exam .exam-header h2 {
+        font-size: 1rem;
+    }
+
+    body.examinee-exam .exam-container {
+        padding-bottom: 80px;
+    }
+}

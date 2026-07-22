@@ -2,14 +2,6 @@
 (function () {
     const base = '../../';
 
-    const logoutBtn = document.getElementById('logoutBtn');
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', function (e) {
-            e.preventDefault();
-            window.location.href = base + 'api/auth/logout.php';
-        });
-    }
-
     axios.get(base + 'api/admin/stats.php', { withCredentials: true })
         .then(function (res) {
             if (res.data.success && res.data.stats) {
@@ -26,5 +18,4 @@
             document.getElementById('statCcmd').textContent = '0';
             document.getElementById('statExaminee').textContent = '0';
         });
-})  ();
-
+})();

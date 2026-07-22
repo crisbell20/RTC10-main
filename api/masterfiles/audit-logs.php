@@ -116,7 +116,8 @@ try {
                 'modules' => getAuditModuleOptions(),
                 'actions' => getAuditActionOptions(),
                 'extended_schema' => $extended,
-                'retention_days_default' => 365,
+                'retention_days_default' => AUDIT_LOG_RETENTION_DAYS,
+                'retention_years' => 2,
             ],
         ]);
     }
@@ -216,11 +217,12 @@ try {
         }
 
         $raw = json_decode(file_get_contents('php://input'), true) ?? [];
-        $days = max(30, min(3650, (int)($raw['days'] ?? $_POST['days'] ?? 365)));
+        $days = max(
+            AUDIT_LOG_RETENTION_DAYS_MIN,
+            min(AUDIT_LOG_RETENTION_DAYS_MAX, (int)($raw['days'] ?? $_POST['days'] ?? AUDIT_LOG_RETENTION_DAYS))
+        );
 
-        $stmt = $pdo->prepare('DELETE FROM tbl_audit_log WHERE Timestamp < DATE_SUB(NOW(), INTERVAL ? DAY)');
-        $stmt->execute([$days]);
-        $deleted = $stmt->rowCount();
+        $deleted = purgeAuditLogsOlderThan($pdo, $days);
 
         auditFromSession(
             $pdo,

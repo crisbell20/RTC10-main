@@ -67,8 +67,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
                 <li><a href="monitor-examination.php"><i class="bi bi-activity"></i>Monitor Examination</a></li>
                 <li><a href="../ccmd/exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
-                <li><a href="#"><i class="bi bi-people-fill"></i>Enrolled Trainees</a></li>
-                <li><a href="monitor-examination.php#incidents"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
+                <li><a href="monitor-examination.php"><i class="bi bi-people-fill"></i>Enrolled Trainees</a></li>
                 <li><a href="reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
                 <li><a href=""><i class="bi bi-clock-history"></i>Audit Logs</a></li>
             </ul>
@@ -107,23 +106,23 @@ $userName = $_SESSION['user_name'] ?? 'User';
 
                 <div class="stat-card red">
                     <div class="stat-header">
-                        <div class="stat-label">Cheating Incidents</div>
-                        <div class="stat-icon icon-red"><i class="bi bi-exclamation-circle-fill"></i></div>
+                        <div class="stat-label">Completed Today</div>
+                        <div class="stat-icon icon-red"><i class="bi bi-check2-circle"></i></div>
                     </div>
-                    <div class="stat-value">12</div>
+                    <div class="stat-value" id="completedToday">--</div>
                     <div class="stat-footer">
-                        <span class="trend-down">-5%</span>
+                        <span>Sessions finished today</span>
                     </div>
                 </div>
 
                 <div class="stat-card purple">
                     <div class="stat-header">
-                        <div class="stat-label">Completed Exams</div>
-                        <div class="stat-icon icon-purple"><i class="bi bi-check-circle-fill"></i></div>
+                        <div class="stat-label">Published Exams</div>
+                        <div class="stat-icon icon-purple"><i class="bi bi-journal-check"></i></div>
                     </div>
-                    <div class="stat-value" id="cheatingIncidents">--</div>
+                    <div class="stat-value" id="publishedExams">--</div>
                     <div class="stat-footer">
-                        <span id="incidentsLabel">--</span>
+                        <span>Available for monitoring</span>
                     </div>
                 </div>
             </div>
@@ -155,66 +154,14 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     </table>
                 </div>
             </div>
-
-            <!-- Cheating Incident Log -->
-            <div class="section-card">
-                <div class="section-header">
-                    <i class="bi bi-exclamation-triangle-fill" style="color: var(--danger-color); font-size: 1.3rem;"></i>
-                    <div>
-                        <h5>Cheating Incident Log</h5>
-                        <p>Recent suspicious activities detected</p>
-                    </div>
-                </div>
-                <div class="section-body">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Trainee Name</th>
-                                <th>Exam</th>
-                                <th>Type of Violation</th>
-                                <th>Time Detected</th>
-                                <th>Action Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="incidentTableBody">
-                            <!-- Data populated from database -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
         </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
+    <script src="../../assets/js/logout-handler.js?v=1"></script>
     <script src="../../assets/js/auto-logout.js"></script>
     <script src="../../js/ccmd/ccmd-dashboard.js"></script>
-    <script>
-        // Logout handler
-        document.getElementById('logoutBtn').addEventListener('click', function(e) {
-            e.preventDefault();
-            Swal.fire({
-                title: 'Logout',
-                text: 'Are you sure you want to logout?',
-                icon: 'question',
-                showCancelButton: true,
-                confirmButtonText: 'Yes, logout',
-                cancelButtonText: 'No, stay',
-                confirmButtonColor: '#2563eb',
-                cancelButtonColor: '#6b7280'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    fetch('../../api/auth/logout.php', {
-                        method: 'POST'
-                    }).then(() => {
-                        window.location.href = '../../login.php';
-                    }).catch(() => {
-                        window.location.href = '../../login.php';
-                    });
-                }
-            });
-        });
-    </script>
 </body>
 </html>

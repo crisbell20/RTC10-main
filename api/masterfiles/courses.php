@@ -24,6 +24,9 @@ if (!in_array($_SESSION['user_role'] ?? '', ['Admin', 'CCMD'])) {
 
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/audit-log-utils.php';
+require_once __DIR__ . '/../includes/batch-enrollment-utils.php';
+require_once __DIR__ . '/../includes/archive-utils.php';
+require_once __DIR__ . '/../includes/validation-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -35,6 +38,7 @@ try {
     if ($request_method === 'GET' && $action === 'list') {
         $coursesQuery = 'SELECT Course_ID, Course_Name, Details, Duration, User_ID 
                          FROM tbl_course 
+                         WHERE ' . activeArchiveCondition($pdo, 'tbl_course') . '
                          ORDER BY Course_Name';
         $coursesStmt = $pdo->prepare($coursesQuery);
         $coursesStmt->execute();
@@ -77,6 +81,9 @@ try {
 
     // Get full hierarchy for Manage Courses: Course → Batch → Section → Examinees
     if ($request_method === 'GET' && $action === 'tree') {
+        backfillCascadeArchives($pdo);
+        autoArchiveExpiredBatches($pdo, true);
+
         $hasUserBatch = false;
         try {
             $tableCheck = $pdo->query("SHOW TABLES LIKE 'tbl_user_batch'");
@@ -85,35 +92,41 @@ try {
             $hasUserBatch = false;
         }
 
-        $coursesQuery = 'SELECT Course_ID, Course_Name, Details, Duration
+        $courseActive = activeArchiveCondition($pdo, 'tbl_course');
+        $coursesQuery = "SELECT Course_ID, Course_Name, Details, Duration
                          FROM tbl_course
-                         ORDER BY Course_Name';
+                         WHERE {$courseActive}
+                         ORDER BY Course_Name";
         $coursesStmt = $pdo->prepare($coursesQuery);
         $coursesStmt->execute();
         $courses = $coursesStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $batchesStmt = $pdo->prepare('
+        $batchVisibility = courseBatchVisibilityCondition('b');
+        $batchActive = activeArchiveCondition($pdo, 'tbl_batch', 'b');
+        $batchesStmt = $pdo->prepare("
             SELECT Batch_ID, Batch_Name, Date_Started, Date_Ended, Course_ID
-            FROM tbl_batch
-            WHERE Course_ID = ? AND (Section_ID IS NULL OR Section_ID = 0)
+            FROM tbl_batch b
+            WHERE b.Course_ID = ? AND {$batchVisibility} AND {$batchActive}
             ORDER BY Batch_Name
-        ');
+        ");
 
-        $legacyBatchesStmt = $pdo->prepare('
+        $legacyBatchesStmt = $pdo->prepare("
             SELECT DISTINCT b.Batch_ID, b.Batch_Name, b.Date_Started, b.Date_Ended, b.Course_ID
             FROM tbl_academic_section s
             INNER JOIN tbl_batch b ON s.Batch_ID = b.Batch_ID
             WHERE b.Course_ID = ?
-              AND (b.Section_ID IS NULL OR b.Section_ID = 0)
+              AND {$batchVisibility}
+              AND {$batchActive}
             ORDER BY b.Batch_Name
-        ');
+        ");
 
-        $sectionsStmt = $pdo->prepare('
+        $sectionActive = activeArchiveCondition($pdo, 'tbl_academic_section');
+        $sectionsStmt = $pdo->prepare("
             SELECT Section_ID, Section_Name, Capacity, Batch_ID
             FROM tbl_academic_section
-            WHERE Batch_ID = ?
+            WHERE Batch_ID = ? AND {$sectionActive}
             ORDER BY Section_Name
-        ');
+        ");
 
         $enrollmentStmt = $pdo->prepare('
             SELECT Batch_ID FROM tbl_batch WHERE Section_ID = ? LIMIT 1
@@ -128,7 +141,7 @@ try {
             ');
 
             $examineesStmt = $pdo->prepare('
-                SELECT DISTINCT u.User_ID, u.Fullname, u.Email, u.Username, u.Academic_Number,
+                SELECT DISTINCT u.User_ID, u.Fullname, u.Email, u.Academic_Number,
                        ub.Status, ub.Date_Enrolled, ub.Batch_ID
                 FROM tbl_user_batch ub
                 INNER JOIN tbl_batch b ON ub.Batch_ID = b.Batch_ID
@@ -139,6 +152,8 @@ try {
         }
 
         foreach ($courses as &$course) {
+            deleteOrphanedEnrollmentBatchesForCourse($pdo, $course['Course_ID']);
+
             $batchesStmt->execute([$course['Course_ID']]);
             $batches = $batchesStmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -208,11 +223,20 @@ try {
             exit;
         }
 
+        if (courseNameExists($pdo, $course_name)) {
+            http_response_code(409);
+            echo json_encode([
+                'success' => false,
+                'message' => 'A course with this name already exists',
+            ]);
+            exit;
+        }
+
         $stmt = $pdo->prepare('INSERT INTO tbl_course (User_ID, Course_Name, Details, Duration) VALUES (?, ?, ?, ?)');
         $stmt->execute([$user_id, $course_name, $details, $duration]);
 
         $courseId = (int)$pdo->lastInsertId();
-        auditFromSession($pdo, 'COURSE', 'CREATE_COURSE', "Course {$course_name} created (ID {$courseId})", 'SUCCESS', 'course', $courseId);
+        auditFromSession($pdo, 'COURSE', 'CREATE_COURSE', "Course {$course_name} created", 'SUCCESS', 'course', $courseId);
 
         http_response_code(201);
         echo json_encode([
@@ -239,10 +263,19 @@ try {
             exit;
         }
 
+        if (courseNameExists($pdo, $course_name, (int)$course_id)) {
+            http_response_code(409);
+            echo json_encode([
+                'success' => false,
+                'message' => 'A course with this name already exists',
+            ]);
+            exit;
+        }
+
         $stmt = $pdo->prepare('UPDATE tbl_course SET Course_Name = ?, Details = ?, Duration = ? WHERE Course_ID = ?');
         $stmt->execute([$course_name, $details, $duration, $course_id]);
 
-        auditFromSession($pdo, 'COURSE', 'UPDATE_COURSE', "Course {$course_name} updated (ID {$course_id})", 'SUCCESS', 'course', (int)$course_id);
+        auditFromSession($pdo, 'COURSE', 'UPDATE_COURSE', "Course {$course_name} updated", 'SUCCESS', 'course', (int)$course_id);
 
         http_response_code(200);
         echo json_encode([
@@ -252,30 +285,65 @@ try {
         exit;
     }
 
-    // Delete course
-    if ($request_method === 'POST' && $action === 'delete') {
-        $course_id = $input['course_id'] ?? $_POST['course_id'] ?? '';
+    // Archive course (soft delete)
+    if ($request_method === 'POST' && $action === 'archive') {
+        $course_id = (int)($input['course_id'] ?? $_POST['course_id'] ?? 0);
 
-        if (empty($course_id)) {
+        if ($course_id <= 0) {
             http_response_code(400);
-            echo json_encode([
-                'success' => false,
-                'message' => 'Course ID is required'
-            ]);
+            echo json_encode(['success' => false, 'message' => 'Course ID is required']);
             exit;
         }
 
-        $stmt = $pdo->prepare('DELETE FROM tbl_course WHERE Course_ID = ?');
-        $stmt->execute([$course_id]);
+        $result = archiveCourseWithDescendants($pdo, $course_id);
+        if (!$result['course']) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Unable to archive course. Run the archive migration first.']);
+            exit;
+        }
 
-        auditFromSession($pdo, 'COURSE', 'DELETE_COURSE', "Course ID {$course_id} deleted", 'SUCCESS', 'course', (int)$course_id);
+        $courseLabel = auditCourseLabel($pdo, $course_id);
+        auditFromSession($pdo, 'COURSE', 'ARCHIVE_COURSE', "Course {$courseLabel} archived", 'SUCCESS', 'course', $course_id);
 
         http_response_code(200);
         echo json_encode([
             'success' => true,
-            'message' => 'Course deleted successfully'
+            'message' => formatCascadeArchiveMessage('course', $result),
+            'cascade' => $result,
         ]);
         exit;
+    }
+
+    // Restore archived course
+    if ($request_method === 'POST' && $action === 'restore') {
+        $course_id = (int)($input['course_id'] ?? $_POST['course_id'] ?? 0);
+
+        if ($course_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Course ID is required']);
+            exit;
+        }
+
+        if (!restoreRecord($pdo, 'tbl_course', 'Course_ID', $course_id)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => restoreFailureMessage($pdo, 'tbl_course', 'Course_ID', $course_id, 'course')]);
+            exit;
+        }
+
+        $courseLabel = auditCourseLabel($pdo, $course_id);
+        auditFromSession($pdo, 'COURSE', 'RESTORE_COURSE', "Course {$courseLabel} restored", 'SUCCESS', 'course', $course_id);
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Course restored successfully. Batches, sections, modules, and subjects remain archived until restored individually from Archive.',
+        ]);
+        exit;
+    }
+
+    // Delete course — disabled; use archive instead
+    if ($request_method === 'POST' && $action === 'delete') {
+        archiveDeletionBlockedResponse();
     }
 
     // Invalid action

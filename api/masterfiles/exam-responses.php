@@ -14,6 +14,11 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/exam-code-utils.php';
+require_once __DIR__ . '/../includes/exam-participant-utils.php';
+require_once __DIR__ . '/../includes/exam-assignment-utils.php';
+require_once __DIR__ . '/../includes/exam-session-utils.php';
+require_once __DIR__ . '/../includes/exam-item-analysis-utils.php';
+require_once __DIR__ . '/../includes/exam-deadline-finalize-utils.php';
 
 function sendSuccess($data = []) {
     http_response_code(200);
@@ -54,10 +59,20 @@ function fetchExamOrFail(PDO $pdo, int $examId): array {
         sendError('Exam not found', 404);
     }
 
+    $exam['Assignments'] = fetchExamAssignments($pdo, $examId);
+    $exam['Assignment_Summary'] = buildExamAssignmentsSummary($exam['Assignments']);
+
     return $exam;
 }
 
 function countAssignedExaminees(PDO $pdo, int $examId): int {
+    if (examParticipantTableExists($pdo)) {
+        $participantCount = countExamParticipants($pdo, $examId);
+        if ($participantCount > 0) {
+            return $participantCount;
+        }
+    }
+
     $stmt = $pdo->prepare('
         SELECT COUNT(DISTINCT ub.User_ID) AS total
         FROM tbl_exam_batch eb
@@ -87,13 +102,32 @@ function applyCompetitionRank(array &$rows): void {
     unset($row);
 }
 
-function enrichRankingRow(array &$row, int $totalItems): void {
-    $score = (float)($row['Score'] ?? 0);
-    $rawPercent = round((float)($row['Percentage'] ?? 0), 2);
+/**
+ * Score from saved answers on this exam's current questions.
+ *
+ * @return array{score:int, answered_count:int, raw_percent:float}
+ */
+function resolveLiveSessionScore(PDO $pdo, int $sessionId, int $examId, int $totalItems): array {
+    return resolveLiveExamSessionScore($pdo, $sessionId, $examId, $totalItems);
+}
+
+function enrichRankingRow(array &$row, int $totalItems, int $examId, PDO $pdo): void {
+    $sessionId = (int)($row['Session_ID'] ?? 0);
+    if ($sessionId > 0 && $examId > 0) {
+        $live = resolveLiveSessionScore($pdo, $sessionId, $examId, $totalItems);
+        $score = (float)$live['score'];
+        $rawPercent = $live['raw_percent'];
+        $row['answered_count'] = $live['answered_count'];
+    } else {
+        $score = (float)($row['Score'] ?? 0);
+        $rawPercent = round((float)($row['Percentage'] ?? 0), 2);
+        $row['answered_count'] = 0;
+    }
+
     $passingScore = (float)($row['Passing_Score'] ?? 50);
 
     $row['total_items'] = $totalItems;
-    $row['score_display'] = $totalItems > 0 ? ($score . '/' . $totalItems) : (string)$score;
+    $row['score_display'] = $totalItems > 0 ? ($score . '/' . $totalItems) : (string)(int)$score;
     $row['grade_percent'] = computeGradePercent($score, $totalItems);
     $row['raw_percent'] = $rawPercent;
     $row['passing_score'] = $passingScore;
@@ -126,6 +160,7 @@ function formatTimeTaken(?string $timeStarted, ?string $timeEnded): string {
 function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
     $hasPersonnelRank = personnelRankColumnExists($pdo);
     $rankSelect = $hasPersonnelRank ? 'u.Personnel_Rank,' : 'NULL AS Personnel_Rank,';
+    $enrollmentSelect = userExamEnrollmentSelectSql($pdo, 'u');
 
     $stmt = $pdo->prepare("
         SELECT
@@ -145,6 +180,7 @@ function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
             u.Fullname,
             u.Academic_Number,
             {$rankSelect}
+            {$enrollmentSelect},
             s.Subject_Name,
             c.Course_Name
         FROM tbl_result r
@@ -157,7 +193,7 @@ function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
           AND es.Exam_ID = ?
           AND es.Time_Ended IS NOT NULL
     ");
-    $stmt->execute([$resultId, $examId]);
+    $stmt->execute(prependExamEnrollmentParams($pdo, $examId, [$resultId, $examId]));
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$result) {
@@ -170,13 +206,22 @@ function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
     $stmt = $pdo->prepare('SELECT COUNT(*) AS total FROM tbl_exam_question WHERE Exam_ID = ?');
     $stmt->execute([$examId]);
     $result['total_questions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
-    $result['grade_percent'] = computeGradePercent((float)$result['Score'], $result['total_questions']);
-    $result['raw_percent'] = round((float)$result['Percentage'], 2);
+
+    $sessionId = (int)($result['Session_ID'] ?? 0);
+    $live = resolveLiveSessionScore($pdo, $sessionId, $examId, $result['total_questions']);
+    $score = (float)$live['score'];
+    $rawPercent = $live['raw_percent'];
+
+    $result['Score'] = $score;
+    $result['Percentage'] = $rawPercent;
+    $result['answered_count'] = $live['answered_count'];
+    $result['grade_percent'] = computeGradePercent($score, $result['total_questions']);
+    $result['raw_percent'] = $rawPercent;
     $result['passing_score'] = (float)($result['Passing_Score'] ?? 50);
     $result['score_display'] = $result['total_questions'] > 0
-        ? ((float)$result['Score'] . '/' . $result['total_questions'])
-        : (string)$result['Score'];
-    $passed = $result['raw_percent'] >= $result['passing_score'];
+        ? ((int)$score . '/' . $result['total_questions'])
+        : (string)(int)$score;
+    $passed = $rawPercent >= $result['passing_score'];
     $result['status'] = $passed ? 'Passed' : 'Failed';
     $result['remarks'] = $result['status'];
     $result['Personnel_Rank'] = trim((string)($result['Personnel_Rank'] ?? '')) ?: null;
@@ -192,12 +237,12 @@ function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
             c_user.Choice_Text AS user_answer_text
         FROM tbl_exam_question eq
         INNER JOIN tbl_question_bank qb ON eq.Question_ID = qb.Question_ID
-        LEFT JOIN tbl_answer a ON eq.Question_ID = a.Question_ID AND a.Result_ID = ?
+        LEFT JOIN tbl_answer a ON eq.Question_ID = a.Question_ID AND a.Session_ID = ?
         LEFT JOIN tbl_choice c_user ON a.Choice_ID = c_user.Choice_ID
         WHERE eq.Exam_ID = ?
         ORDER BY eq.Question_ID
     ');
-    $stmt->execute([$resultId, $examId]);
+    $stmt->execute([$sessionId, $examId]);
     $questions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($questions as &$question) {
@@ -235,29 +280,36 @@ try {
         }
 
         $exam = fetchExamOrFail($pdo, $examId);
+        try {
+            finalizeExamAfterDeadline($pdo, $examId);
+        } catch (Exception $e) {
+            error_log('exam-responses finalize exam ' . $examId . ': ' . $e->getMessage());
+        }
+
         $assignedCount = countAssignedExaminees($pdo, $examId);
         $totalItems = (int)($exam['question_count'] ?? 0);
         $passingScore = (float)($exam['Passing_Score'] ?? 50);
 
         $stmt = $pdo->prepare('
-            SELECT r.Score, r.Percentage
-            FROM tbl_result r
-            INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
+            SELECT es.Session_ID
+            FROM tbl_exam_session es
+            INNER JOIN tbl_result r ON r.Session_ID = es.Session_ID
             WHERE es.Exam_ID = ?
               AND es.Time_Ended IS NOT NULL
         ');
         $stmt->execute([$examId]);
-        $finishedRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $finishedSessions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $finishedCount = count($finishedRows);
+        $finishedCount = count($finishedSessions);
         $passedCount = 0;
         $gradeSum = 0.0;
         $highestGrade = null;
         $lowestGrade = null;
 
-        foreach ($finishedRows as $row) {
-            $grade = computeGradePercent((float)($row['Score'] ?? 0), $totalItems);
-            $rawPercent = (float)($row['Percentage'] ?? 0);
+        foreach ($finishedSessions as $row) {
+            $live = resolveLiveSessionScore($pdo, (int)$row['Session_ID'], $examId, $totalItems);
+            $grade = computeGradePercent((float)$live['score'], $totalItems);
+            $rawPercent = $live['raw_percent'];
             $gradeSum += $grade;
             $highestGrade = $highestGrade === null ? $grade : max($highestGrade, $grade);
             $lowestGrade = $lowestGrade === null ? $grade : min($lowestGrade, $grade);
@@ -295,6 +347,7 @@ try {
         $search = trim($_GET['search'] ?? '');
         $hasPersonnelRank = personnelRankColumnExists($pdo);
         $rankSelect = $hasPersonnelRank ? 'u.Personnel_Rank,' : 'NULL AS Personnel_Rank,';
+        $enrollmentSelect = userExamEnrollmentSelectSql($pdo, 'u');
 
         $sql = "
             SELECT
@@ -304,6 +357,7 @@ try {
                 u.Fullname,
                 u.Academic_Number,
                 {$rankSelect}
+                {$enrollmentSelect},
                 r.Score,
                 r.Percentage,
                 r.Remarks,
@@ -318,16 +372,15 @@ try {
             WHERE es.Exam_ID = ?
               AND es.Time_Ended IS NOT NULL
         ";
-        $params = [$examId];
+        $params = prependExamEnrollmentParams($pdo, $examId, [$examId]);
 
         if ($search !== '') {
-            $sql .= ' AND (u.Fullname LIKE ? OR u.Academic_Number LIKE ? OR u.Username LIKE ?';
+            $sql .= ' AND (u.Fullname LIKE ? OR u.Academic_Number LIKE ?';
             if ($hasPersonnelRank) {
                 $sql .= ' OR u.Personnel_Rank LIKE ?';
             }
             $sql .= ')';
             $like = '%' . $search . '%';
-            $params[] = $like;
             $params[] = $like;
             $params[] = $like;
             if ($hasPersonnelRank) {
@@ -342,7 +395,7 @@ try {
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         foreach ($rows as &$row) {
-            enrichRankingRow($row, $totalItems);
+            enrichRankingRow($row, $totalItems, $examId, $pdo);
         }
         unset($row);
 
@@ -374,24 +427,35 @@ try {
 
         fetchExamOrFail($pdo, $examId);
 
-        $stmt = $pdo->prepare('
+        $enrollmentSelect = userExamEnrollmentSelectSql($pdo, 'u');
+        $participantFilter = '';
+        $params = prependExamEnrollmentParams($pdo, $examId, [$examId, $examId]);
+
+        if (examParticipantTableExists($pdo)) {
+            $participantFilter = "
+              AND (
+                  NOT EXISTS (SELECT 1 FROM tbl_exam_participant ep_all WHERE ep_all.Exam_ID = ?)
+                  OR EXISTS (
+                      SELECT 1 FROM tbl_exam_participant ep_allow
+                      WHERE ep_allow.Exam_ID = ? AND ep_allow.User_ID = u.User_ID
+                  )
+              )";
+            $params[] = $examId;
+            $params[] = $examId;
+        }
+
+        $stmt = $pdo->prepare("
             SELECT DISTINCT
                 u.User_ID,
                 u.Fullname,
                 u.Academic_Number,
-                u.Username,
-                (
-                    SELECT GROUP_CONCAT(DISTINCT b.Batch_Name ORDER BY b.Batch_Name SEPARATOR \', \')
-                    FROM tbl_exam_batch eb
-                    INNER JOIN tbl_user_batch ub2 ON eb.Batch_ID = ub2.Batch_ID AND ub2.User_ID = u.User_ID AND ub2.Status = \'Active\'
-                    INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
-                    WHERE eb.Exam_ID = ?
-                ) AS batch_names
+                {$enrollmentSelect}
             FROM tbl_exam_batch eb
             INNER JOIN tbl_user_batch ub ON eb.Batch_ID = ub.Batch_ID
             INNER JOIN tbl_user u ON ub.User_ID = u.User_ID
             WHERE eb.Exam_ID = ?
-              AND ub.Status = \'Active\'
+              AND ub.Status = 'Active'
+              {$participantFilter}
               AND u.User_ID NOT IN (
                   SELECT es.User_ID
                   FROM tbl_exam_session es
@@ -400,8 +464,8 @@ try {
                     AND es.Time_Ended IS NOT NULL
               )
             ORDER BY u.Fullname ASC
-        ');
-        $stmt->execute([$examId, $examId, $examId]);
+        ");
+        $stmt->execute($params);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         sendSuccess($rows);
@@ -412,7 +476,8 @@ try {
             sendError('exam_id is required');
         }
         fetchExamOrFail($pdo, $examId);
-        auditFromSession($pdo, 'REPORT', 'EXPORT_EXAM_RESPONSES', "Exported rankings CSV for exam {$examId}", 'SUCCESS', 'exam', $examId);
+        $examLabel = auditExamLabel($pdo, $examId);
+        auditFromSession($pdo, 'REPORT', 'EXPORT_EXAM_RESPONSES', "Exported rankings CSV for exam \"{$examLabel}\"", 'SUCCESS', 'exam', $examId);
         sendSuccess(['logged' => true]);
     }
 
@@ -425,14 +490,28 @@ try {
         fetchExamOrFail($pdo, $examId);
         $detail = buildResultDetail($pdo, $resultId, $examId);
 
+        $examineeLabel = auditUserLabel($pdo, (int)$detail['User_ID']);
+        $examLabel = $detail['exam_title'] ?? auditExamLabel($pdo, $examId);
         logExamAuditAction(
             $pdo,
             (int)$_SESSION['user_id'],
             'VIEW_EXAM_RESPONSE',
-            "Exam {$examId} result {$resultId} viewed by admin"
+            "{$examineeLabel} exam response viewed for \"{$examLabel}\""
         );
 
         sendSuccess($detail);
+    }
+
+    if ($action === 'item_analysis') {
+        if (!$examId) {
+            sendError('exam_id is required');
+        }
+
+        fetchExamOrFail($pdo, $examId);
+        $assignedCount = countAssignedExaminees($pdo, $examId);
+        $analysis = buildExamItemAnalysis($pdo, $examId, $assignedCount);
+
+        sendSuccess($analysis);
     }
 
     sendError('Invalid action');

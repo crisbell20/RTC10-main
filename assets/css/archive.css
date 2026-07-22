@@ -1,0 +1,109 @@
+.archive-type-tabs .nav-link {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #6b7280;
+    border-radius: 8px;
+    padding: 0.5rem 1rem;
+}
+
+.archive-type-tabs .nav-link.active {
+    background: #4f46e5;
+    color: #fff;
+}
+
+.archive-filter-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.25rem;
+}
+
+.archive-table th {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #6b7280;
+    white-space: nowrap;
+}
+
+.archive-table td {
+    vertical-align: middle;
+    font-size: 0.9rem;
+}
+
+.archive-exam-title {
+    font-weight: 600;
+    color: #111827;
+    margin-bottom: 0.1rem;
+}
+
+.archive-exam-meta {
+    font-size: 0.8rem;
+    color: #6b7280;
+}
+
+.archive-course-subject {
+    font-size: 0.88rem;
+    line-height: 1.35;
+}
+
+.archive-empty-state {
+    padding: 3rem 1.5rem;
+    text-align: center;
+}
+
+.archive-empty-state i {
+    font-size: 2.5rem;
+    color: #d1d5db;
+    margin-bottom: 0.75rem;
+}
+
+.archive-empty-state h6 {
+    font-weight: 600;
+    color: #374151;
+}
+
+.archive-empty-state p {
+    font-size: 0.9rem;
+    color: #6b7280;
+    max-width: 420px;
+    margin: 0.5rem auto 0;
+}
+
+.archive-actions .btn {
+    padding: 0.2rem 0.5rem;
+    font-size: 0.8rem;
+}
+
+.archive-retention-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.archive-retention-badge--pending {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.archive-retention-badge--soon {
+    background: #fef3c7;
+    color: #b45309;
+}
+
+.archive-retention-badge--eligible {
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.archive-retention-badge--protected {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.archive-status-badge {
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+

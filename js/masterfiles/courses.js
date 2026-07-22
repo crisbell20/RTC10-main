@@ -7,6 +7,8 @@ const USERS_API = API_BASE + 'users.php';
 let addBatchModal = null;
 let addSectionModal = null;
 let addCourseModal = null;
+let allCourses = [];
+let currentCourseFilter = '';
 
 function initModals() {
     const batchModalEl = document.getElementById('addBatchModal');
@@ -42,7 +44,9 @@ function loadCourses() {
     axios.get(`${COURSES_API}?action=tree`)
         .then(response => {
             if (response.data.success) {
-                renderCourses(response.data.data || []);
+                allCourses = response.data.data || [];
+                populateCourseFilter();
+                renderFilteredCourses();
             } else {
                 setCoursesLoadError('Failed to load courses');
                 showAlert(response.data.message || 'Failed to load courses', 'error');
@@ -54,6 +58,69 @@ function loadCourses() {
             showAlert(msg, 'error');
             console.error(error);
         });
+}
+
+function populateCourseFilter() {
+    const select = document.getElementById('filterCourse');
+    if (!select) return;
+
+    const current = select.value;
+    select.innerHTML = '<option value="">All courses</option>';
+    allCourses.forEach(course => {
+        select.add(new Option(course.Course_Name, course.Course_ID));
+    });
+    select.value = currentCourseFilter || current;
+}
+
+function getFilteredCourses() {
+    if (!currentCourseFilter) {
+        return allCourses;
+    }
+    return allCourses.filter(c => String(c.Course_ID) === String(currentCourseFilter));
+}
+
+function renderFilteredCourses() {
+    renderCourses(getFilteredCourses());
+}
+
+function buildActionMenu(items) {
+    const menuItems = items.map(item =>
+        `<li><button class="dropdown-item" type="button" data-action="${item.action}" ${item.attrs || ''}>${item.label}</button></li>`
+    ).join('');
+    return `<div class="dropdown">
+        <button type="button" class="btn btn-sm btn-link text-secondary p-0" data-bs-toggle="dropdown" aria-expanded="false" title="More actions">
+            <i class="bi bi-three-dots-vertical" style="font-size: 1.2rem;"></i>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">${menuItems}</ul>
+    </div>`;
+}
+
+function findCourse(courseId) {
+    return allCourses.find(c => String(c.Course_ID) === String(courseId));
+}
+
+function findBatch(batchId) {
+    for (const course of allCourses) {
+        for (const batch of course.batches || []) {
+            if (String(batch.Batch_ID) === String(batchId)) {
+                return { ...batch, Course_ID: course.Course_ID };
+            }
+        }
+    }
+    return null;
+}
+
+function findSection(sectionId) {
+    for (const course of allCourses) {
+        for (const batch of course.batches || []) {
+            for (const section of batch.sections || []) {
+                if (String(section.Section_ID) === String(sectionId)) {
+                    return { ...section, Batch_ID: batch.Batch_ID, Course_ID: course.Course_ID };
+                }
+            }
+        }
+    }
+    return null;
 }
 
 function setCoursesLoadError(message) {
@@ -79,13 +146,14 @@ function renderCourses(courses) {
                     ${course.Details ? `<p class="text-muted mb-1">${escapeHtml(course.Details)}</p>` : ''}
                     ${course.Duration ? `<small class="text-muted">Duration: ${escapeHtml(course.Duration)}</small>` : ''}
                 </div>
-                <div>
+                <div class="d-flex gap-2 align-items-start">
                     <button type="button" class="btn btn-sm btn-outline-primary" data-action="add-batch" data-course-id="${course.Course_ID}">
                         <i class="bi bi-plus"></i> Add Batch
                     </button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" data-action="delete-course" data-course-id="${course.Course_ID}">
-                        <i class="bi bi-trash"></i>
-                    </button>
+                    ${buildActionMenu([
+                        { action: 'edit-course', attrs: `data-course-id="${course.Course_ID}"`, label: '<i class="bi bi-pencil me-2"></i>Edit' },
+                        { action: 'archive-course', attrs: `data-course-id="${course.Course_ID}"`, label: '<i class="bi bi-archive me-2"></i>Archive' },
+                    ])}
                 </div>
             </div>
             <div class="mt-3" id="batches-${course.Course_ID}">
@@ -107,13 +175,14 @@ function renderBatches(batches, courseId) {
                     <strong>${escapeHtml(batch.Batch_Name)}</strong>
                     ${batch.Date_Started ? `<small class="text-muted ms-2">Start: ${new Date(batch.Date_Started).toLocaleDateString()}</small>` : ''}
                 </div>
-                <div>
+                <div class="d-flex gap-2 align-items-center">
                     <button type="button" class="btn btn-sm btn-outline-info" data-action="add-section" data-batch-id="${batch.Batch_ID}">
                         <i class="bi bi-plus"></i> Add Section
                     </button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" data-action="delete-batch" data-batch-id="${batch.Batch_ID}">
-                        <i class="bi bi-trash"></i>
-                    </button>
+                    ${buildActionMenu([
+                        { action: 'edit-batch', attrs: `data-batch-id="${batch.Batch_ID}"`, label: '<i class="bi bi-pencil me-2"></i>Edit' },
+                        { action: 'archive-batch', attrs: `data-batch-id="${batch.Batch_ID}"`, label: '<i class="bi bi-archive me-2"></i>Archive' },
+                    ])}
                 </div>
             </div>
             <div class="mt-2" id="sections-${batch.Batch_ID}">
@@ -135,13 +204,14 @@ function renderSections(sections, courseId) {
                     <strong>${escapeHtml(section.Section_Name)}</strong>
                     <small class="text-muted ms-2">Capacity: ${section.Capacity}</small>
                 </div>
-                <div>
-                    <button type="button" class="btn btn-sm btn-outline-info" data-action="view-section-users" data-section-id="${section.Section_ID}" title="View/Assign Users">
+                <div class="d-flex gap-2 align-items-center">
+                    <button type="button" class="btn btn-sm btn-outline-info" data-action="view-section-users" data-section-id="${section.Section_ID}" title="View/Assign Users" aria-expanded="false">
                         <i class="bi bi-people"></i>
                     </button>
-                    <button type="button" class="btn btn-sm btn-outline-danger" data-action="delete-section" data-section-id="${section.Section_ID}" data-course-id="${courseId}">
-                        <i class="bi bi-trash"></i>
-                    </button>
+                    ${buildActionMenu([
+                        { action: 'edit-section', attrs: `data-section-id="${section.Section_ID}"`, label: '<i class="bi bi-pencil me-2"></i>Edit' },
+                        { action: 'archive-section', attrs: `data-section-id="${section.Section_ID}" data-course-id="${courseId}"`, label: '<i class="bi bi-archive me-2"></i>Archive' },
+                    ])}
                 </div>
             </div>
             <div id="section-users-${section.Section_ID}" class="batch-users ms-3"></div>
@@ -155,6 +225,7 @@ function addBatch(courseId) {
         showAlert('Batch form is not available', 'error');
         return;
     }
+    resetBatchModal();
     courseIdInput.value = courseId;
     if (addBatchModal) {
         addBatchModal.show();
@@ -167,74 +238,128 @@ function addSection(batchId) {
         showAlert('Section form is not available', 'error');
         return;
     }
+    resetSectionModal();
     batchIdInput.value = batchId;
     if (addSectionModal) {
         addSectionModal.show();
     }
 }
 
-function deleteCourse(courseId) {
+function resetCourseModal() {
+    const form = document.getElementById('addCourseForm');
+    form?.reset();
+    document.getElementById('editCourseId').value = '';
+    document.getElementById('courseModalTitle').textContent = 'Add New Course';
+    document.getElementById('courseSubmitBtn').textContent = 'Add Course';
+}
+
+function resetBatchModal() {
+    const form = document.getElementById('addBatchForm');
+    form?.reset();
+    document.getElementById('editBatchId').value = '';
+    document.getElementById('batchModalTitle').textContent = 'Add Batch to Course';
+    document.getElementById('batchSubmitBtn').textContent = 'Add Batch';
+}
+
+function resetSectionModal() {
+    const form = document.getElementById('addSectionForm');
+    form?.reset();
+    document.getElementById('editSectionId').value = '';
+    document.getElementById('sectionModalTitle').textContent = 'Add Section to Batch';
+    document.getElementById('sectionSubmitBtn').textContent = 'Add Section';
+}
+
+function editCourse(courseId) {
+    const course = findCourse(courseId);
+    if (!course) return;
+    resetCourseModal();
+    document.getElementById('editCourseId').value = course.Course_ID;
+    document.querySelector('#addCourseForm [name=course_name]').value = course.Course_Name || '';
+    document.querySelector('#addCourseForm [name=details]').value = course.Details || '';
+    document.querySelector('#addCourseForm [name=duration]').value = course.Duration || '';
+    document.getElementById('courseModalTitle').textContent = 'Edit Course';
+    document.getElementById('courseSubmitBtn').textContent = 'Save Changes';
+    addCourseModal?.show();
+}
+
+function editBatch(batchId) {
+    const batch = findBatch(batchId);
+    if (!batch) return;
+    resetBatchModal();
+    document.getElementById('editBatchId').value = batch.Batch_ID;
+    document.getElementById('batchCourseId').value = batch.Course_ID;
+    document.querySelector('#addBatchForm [name=batch_name]').value = batch.Batch_Name || '';
+    document.querySelector('#addBatchForm [name=date_started]').value = batch.Date_Started ? String(batch.Date_Started).slice(0, 10) : '';
+    document.querySelector('#addBatchForm [name=date_ended]').value = batch.Date_Ended ? String(batch.Date_Ended).slice(0, 10) : '';
+    document.getElementById('batchModalTitle').textContent = 'Edit Batch';
+    document.getElementById('batchSubmitBtn').textContent = 'Save Changes';
+    addBatchModal?.show();
+}
+
+function editSection(sectionId) {
+    const section = findSection(sectionId);
+    if (!section) return;
+    resetSectionModal();
+    document.getElementById('editSectionId').value = section.Section_ID;
+    document.getElementById('sectionBatchId').value = section.Batch_ID;
+    document.querySelector('#addSectionForm [name=section_name]').value = section.Section_Name || '';
+    document.querySelector('#addSectionForm [name=capacity]').value = section.Capacity || 40;
+    document.getElementById('sectionModalTitle').textContent = 'Edit Section';
+    document.getElementById('sectionSubmitBtn').textContent = 'Save Changes';
+    addSectionModal?.show();
+}
+
+function archiveCourse(courseId) {
     Swal.fire({
-        title: 'Delete Course?',
-        text: 'This will also delete all sections and batches',
+        title: 'Archive Course?',
+        html: 'The course and all its <strong>batches, sections, modules, and subjects</strong> will be archived.<br><br>You can restore children individually from Archive later.',
         icon: 'warning',
         showCancelButton: true,
-        confirmButtonText: 'Yes, delete',
-        cancelButtonText: 'Cancel'
+        confirmButtonText: 'Archive',
     }).then(result => {
-        if (result.isConfirmed) {
-            axios.post(COURSES_API, { action: 'delete', course_id: courseId })
-                .then(() => {
-                    showAlert('Course deleted successfully', 'success');
-                    loadCourses();
-                })
-                .catch(error => {
-                    showAlert(error.response?.data?.message || 'Error deleting course', 'error');
-                });
-        }
+        if (!result.isConfirmed) return;
+        axios.post(COURSES_API, { action: 'archive', course_id: courseId })
+            .then(res => {
+                showAlert(res.data.message || 'Course archived successfully', 'success');
+                loadCourses();
+            })
+            .catch(error => showAlert(error.response?.data?.message || 'Error archiving course', 'error'));
     });
 }
 
-function deleteSection(sectionId, courseId) {
+function archiveBatch(batchId) {
     Swal.fire({
-        title: 'Delete Section?',
-        text: 'This will also delete all examinee assignments in this section',
+        title: 'Archive Batch?',
+        html: 'The batch and all its <strong>sections</strong> will be archived.<br><br>You can restore individual sections from Archive later.',
         icon: 'warning',
         showCancelButton: true,
-        confirmButtonText: 'Yes, delete',
-        cancelButtonText: 'Cancel'
+        confirmButtonText: 'Archive',
     }).then(result => {
-        if (result.isConfirmed) {
-            axios.post(SECTIONS_API, { action: 'delete', section_id: sectionId })
-                .then(() => {
-                    showAlert('Section deleted successfully', 'success');
-                    loadCourses();
-                })
-                .catch(error => {
-                    showAlert(error.response?.data?.message || 'Error deleting section', 'error');
-                });
-        }
+        if (!result.isConfirmed) return;
+        axios.post(BATCHES_API, { action: 'archive', batch_id: batchId })
+            .then(res => {
+                showAlert(res.data.message || 'Batch archived successfully', 'success');
+                loadCourses();
+            })
+            .catch(error => showAlert(error.response?.data?.message || 'Error archiving batch', 'error'));
     });
 }
 
-function deleteBatch(batchId) {
+function archiveSection(sectionId) {
     Swal.fire({
-        title: 'Delete Batch?',
+        title: 'Archive Section?',
+        text: 'The section will be hidden from Manage Courses.',
         icon: 'warning',
         showCancelButton: true,
-        confirmButtonText: 'Yes, delete',
-        cancelButtonText: 'Cancel'
+        confirmButtonText: 'Archive',
     }).then(result => {
-        if (result.isConfirmed) {
-            axios.post(BATCHES_API, { action: 'delete', batch_id: batchId })
-                .then(() => {
-                    showAlert('Batch deleted successfully', 'success');
-                    loadCourses();
-                })
-                .catch(error => {
-                    showAlert(error.response?.data?.message || 'Error deleting batch', 'error');
-                });
-        }
+        if (!result.isConfirmed) return;
+        axios.post(SECTIONS_API, { action: 'archive', section_id: sectionId })
+            .then(() => {
+                showAlert('Section archived successfully', 'success');
+                loadCourses();
+            })
+            .catch(error => showAlert(error.response?.data?.message || 'Error archiving section', 'error'));
     });
 }
 
@@ -258,33 +383,38 @@ function bindCourseForms() {
     addCourseForm.addEventListener('submit', function(e) {
         e.preventDefault();
         const formData = new FormData(this);
+        const courseId = formData.get('course_id');
         const data = {
             course_name: formData.get('course_name'),
             details: formData.get('details'),
             duration: formData.get('duration'),
-            action: 'add'
+            action: courseId ? 'update' : 'add',
         };
+        if (courseId) data.course_id = courseId;
 
         axios.post(COURSES_API, data)
             .then(response => {
                 if (response.data.success) {
-                    showAlert('Course added successfully', 'success');
-                    this.reset();
+                    showAlert(courseId ? 'Course updated successfully' : 'Course added successfully', 'success');
+                    resetCourseModal();
                     hideModal(addCourseModal);
                     loadCourses();
                 } else {
-                    showAlert(response.data.message || 'Failed to add course', 'error');
+                    showAlert(response.data.message || 'Failed to save course', 'error');
                 }
             })
             .catch(error => {
-                showAlert(error.response?.data?.message || 'Error adding course', 'error');
+                showAlert(error.response?.data?.message || 'Error saving course', 'error');
             });
     });
+
+    document.getElementById('addCourseModal')?.addEventListener('hidden.bs.modal', resetCourseModal);
 
     addBatchForm.addEventListener('submit', function(e) {
         e.preventDefault();
         const formData = new FormData(this);
         const courseId = formData.get('course_id');
+        const batchId = formData.get('batch_id');
         const batchName = formData.get('batch_name');
 
         if (!courseId) {
@@ -301,29 +431,33 @@ function bindCourseForms() {
             batch_name: batchName,
             date_started: formData.get('date_started') || null,
             date_ended: formData.get('date_ended') || null,
-            action: 'add'
+            action: batchId ? 'update' : 'add',
         };
+        if (batchId) data.batch_id = batchId;
 
         axios.post(BATCHES_API, data)
             .then(response => {
                 if (response.data.success) {
-                    showAlert(response.data.message || 'Batch added successfully', 'success');
-                    this.reset();
+                    showAlert(response.data.message || (batchId ? 'Batch updated successfully' : 'Batch added successfully'), 'success');
+                    resetBatchModal();
                     hideModal(addBatchModal);
                     loadCourses();
                 } else {
-                    showAlert(response.data.message || 'Failed to add batch', 'error');
+                    showAlert(response.data.message || 'Failed to save batch', 'error');
                 }
             })
             .catch(error => {
-                showAlert(error.response?.data?.message || 'Error adding batch', 'error');
+                showAlert(error.response?.data?.message || 'Error saving batch', 'error');
             });
     });
+
+    document.getElementById('addBatchModal')?.addEventListener('hidden.bs.modal', resetBatchModal);
 
     addSectionForm.addEventListener('submit', function(e) {
         e.preventDefault();
         const formData = new FormData(this);
         const batchId = formData.get('batch_id');
+        const sectionId = formData.get('section_id');
         const sectionName = formData.get('section_name');
 
         if (!batchId) {
@@ -339,24 +473,27 @@ function bindCourseForms() {
             batch_id: batchId,
             section_name: sectionName,
             capacity: formData.get('capacity') || 40,
-            action: 'add'
+            action: sectionId ? 'update' : 'add',
         };
+        if (sectionId) data.section_id = sectionId;
 
         axios.post(SECTIONS_API, data)
             .then(response => {
                 if (response.data.success) {
-                    showAlert(response.data.message || 'Section added successfully', 'success');
-                    this.reset();
+                    showAlert(response.data.message || (sectionId ? 'Section updated successfully' : 'Section added successfully'), 'success');
+                    resetSectionModal();
                     hideModal(addSectionModal);
                     loadCourses();
                 } else {
-                    showAlert(response.data.message || 'Failed to add section', 'error');
+                    showAlert(response.data.message || 'Failed to save section', 'error');
                 }
             })
             .catch(error => {
-                showAlert(error.response?.data?.message || 'Error adding section', 'error');
+                showAlert(error.response?.data?.message || 'Error saving section', 'error');
             });
     });
+
+    document.getElementById('addSectionModal')?.addEventListener('hidden.bs.modal', resetSectionModal);
 }
 
 function bindCourseActions() {
@@ -385,21 +522,39 @@ function bindCourseActions() {
             return;
         }
 
-        if (action === 'delete-course') {
+        if (action === 'edit-course') {
             e.preventDefault();
-            deleteCourse(button.dataset.courseId);
+            editCourse(button.dataset.courseId);
             return;
         }
 
-        if (action === 'delete-batch') {
+        if (action === 'archive-course') {
             e.preventDefault();
-            deleteBatch(button.dataset.batchId);
+            archiveCourse(button.dataset.courseId);
             return;
         }
 
-        if (action === 'delete-section') {
+        if (action === 'edit-batch') {
             e.preventDefault();
-            deleteSection(button.dataset.sectionId, button.dataset.courseId);
+            editBatch(button.dataset.batchId);
+            return;
+        }
+
+        if (action === 'archive-batch') {
+            e.preventDefault();
+            archiveBatch(button.dataset.batchId);
+            return;
+        }
+
+        if (action === 'edit-section') {
+            e.preventDefault();
+            editSection(button.dataset.sectionId);
+            return;
+        }
+
+        if (action === 'archive-section') {
+            e.preventDefault();
+            archiveSection(button.dataset.sectionId);
             return;
         }
 
@@ -421,90 +576,141 @@ document.querySelectorAll('.dropdown-toggle').forEach(toggle => {
     });
 });
 
-// Logout handler
-document.getElementById('logoutBtn').addEventListener('click', function(e) {
-    e.preventDefault();
-    Swal.fire({
-        title: 'Logout',
-        text: 'Are you sure you want to logout?',
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, logout',
-        cancelButtonText: 'No, stay',
-        confirmButtonColor: '#2563eb',
-        cancelButtonColor: '#6b7280'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            fetch('../../api/auth/logout.php', {
-                method: 'POST'
-            }).then(() => {
-                window.location.href = '../../login.php';
-            }).catch(() => {
-                window.location.href = '../../login.php';
-            });
-        }
-    });
-});
-
 // View/assign users to section
-function viewSectionUsers(sectionId) {
+let openSectionUsersId = null;
+
+function getSectionUsersToggleButton(sectionId) {
+    return document.querySelector(`[data-action="view-section-users"][data-section-id="${sectionId}"]`);
+}
+
+function updateSectionUsersToggleButton(sectionId, isOpen) {
+    const button = getSectionUsersToggleButton(sectionId);
+    if (!button) {
+        return;
+    }
+
+    const icon = button.querySelector('i');
+    if (icon) {
+        icon.className = isOpen ? 'bi bi-chevron-up' : 'bi bi-people';
+    }
+
+    button.title = isOpen ? 'Hide assigned users' : 'View/Assign Users';
+    button.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+}
+
+function collapseSectionUsers(sectionId) {
+    const container = document.getElementById(`section-users-${sectionId}`);
+    if (container) {
+        container.innerHTML = '';
+        container.dataset.open = '0';
+    }
+
+    updateSectionUsersToggleButton(sectionId, false);
+
+    if (openSectionUsersId === String(sectionId)) {
+        openSectionUsersId = null;
+    }
+}
+
+function bindSectionUsersPanelEvents(sectionId, container) {
+    container.querySelector('[data-action="assign-section-users"]')?.addEventListener('click', () => {
+        assignUserToSection(sectionId);
+    });
+
+    container.querySelectorAll('[data-action="remove-section-user"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            removeFromSection(btn.dataset.userId, btn.dataset.sectionId);
+        });
+    });
+}
+
+function renderSectionUsersPanel(sectionId, users, options = {}) {
+    const { errorMessage = '' } = options;
+    const countLabel = users.length
+        ? `Assigned Trainees (${users.length})`
+        : 'Assigned Trainees';
+
+    let bodyHtml = '';
+    if (errorMessage) {
+        bodyHtml = `<div class="text-danger small">${escapeHtml(errorMessage)}</div>`;
+    } else if (users.length === 0) {
+        bodyHtml = '<div class="text-muted small">No users assigned</div>';
+    } else {
+        bodyHtml = users.map(user => `
+            <div class="small mb-1 d-flex align-items-center flex-wrap gap-1">
+                <span>${escapeHtml(user.Fullname)} (${escapeHtml(user.Email)})</span>
+                <button class="btn btn-sm btn-outline-danger" data-action="remove-section-user" data-user-id="${user.User_ID}" data-section-id="${sectionId}" title="Remove">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+        `).join('');
+    }
+
+    return `
+        <div class="section-users-panel border rounded p-2 mt-1">
+            <div class="mb-2">
+                <span class="small fw-semibold">${countLabel}</span>
+            </div>
+            <div class="section-users-list mb-2">${bodyHtml}</div>
+            <button type="button" class="btn btn-sm btn-outline-primary" data-action="assign-section-users" data-section-id="${sectionId}">
+                Assign Section
+            </button>
+        </div>
+    `;
+}
+
+function viewSectionUsers(sectionId, options = {}) {
+    const { reload = false } = options;
     const container = document.getElementById(`section-users-${sectionId}`);
     if (!container) {
         return;
     }
 
-    container.innerHTML = '<div class="text-muted small">Loading...</div>';
+    const isOpen = container.dataset.open === '1';
+    if (isOpen && !reload) {
+        collapseSectionUsers(sectionId);
+        return;
+    }
+
+    if (openSectionUsersId && openSectionUsersId !== String(sectionId)) {
+        collapseSectionUsers(openSectionUsersId);
+    }
+
+    container.dataset.open = '1';
+    openSectionUsersId = String(sectionId);
+    updateSectionUsersToggleButton(sectionId, true);
+    container.innerHTML = '<div class="text-muted small ms-1">Loading...</div>';
 
     axios.get(`${BATCHES_API}?action=users_by_section&section_id=${sectionId}`)
         .then(response => {
             if (response.data.success) {
                 const users = response.data.data || [];
-
-                if (users.length === 0) {
-                    container.innerHTML = '<div class="text-muted small">No users assigned</div>';
-                } else {
-                    container.innerHTML = users.map(user => `
-                        <div class="small mb-1">
-                            ${escapeHtml(user.Fullname)} (${escapeHtml(user.Email)})
-                            <button class="btn btn-sm btn-outline-danger ms-2" data-action="remove-section-user" data-user-id="${user.User_ID}" data-section-id="${sectionId}" title="Remove">
-                                <i class="bi bi-x"></i>
-                            </button>
-                        </div>
-                    `).join('');
-                }
-
-                container.innerHTML += `
-                    <button type="button" class="btn btn-sm btn-outline-primary mt-2" data-action="assign-section-users" data-section-id="${sectionId}">
-                        <i class="bi bi-person-plus"></i> Assign Examinees
-                    </button>
-                `;
-
-                container.querySelector('[data-action="assign-section-users"]')?.addEventListener('click', () => {
-                    assignUserToSection(sectionId);
-                });
-                container.querySelectorAll('[data-action="remove-section-user"]').forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        removeFromSection(btn.dataset.userId, btn.dataset.sectionId);
-                    });
-                });
+                container.innerHTML = renderSectionUsersPanel(sectionId, users);
             } else {
-                container.innerHTML = '<div class="text-danger small">Failed to load assigned users</div>';
+                container.innerHTML = renderSectionUsersPanel(sectionId, [], {
+                    errorMessage: 'Failed to load assigned users',
+                });
             }
+
+            bindSectionUsersPanelEvents(sectionId, container);
         })
         .catch(error => {
             console.error('Error loading section users:', error);
-            container.innerHTML = '<div class="text-danger small">Error loading assigned users</div>';
+            container.innerHTML = renderSectionUsersPanel(sectionId, [], {
+                errorMessage: 'Error loading assigned users',
+            });
+            bindSectionUsersPanelEvents(sectionId, container);
         });
 }
 
 // Assign users to section (multi-select with checkboxes via SweetAlert)
 function assignUserToSection(sectionId) {
     Promise.all([
-        axios.get(`${BATCHES_API}?action=users_by_section&section_id=${sectionId}`),
         axios.get(`${BATCHES_API}?action=section_capacity&section_id=${sectionId}`),
+        axios.get(`${BATCHES_API}?action=enrolled_examinee_ids`),
         axios.get(`${USERS_API}?action=list`)
     ])
-        .then(([assignedResponse, capacityResponse, usersResponse]) => {
+        .then(([capacityResponse, enrolledResponse, usersResponse]) => {
             if (!usersResponse.data.success) {
                 showAlert('Error loading examinees', 'error');
                 return;
@@ -525,9 +731,9 @@ function assignUserToSection(sectionId) {
                 return;
             }
 
-            const assignedIds = new Set(
-                (assignedResponse.data.success ? assignedResponse.data.data || [] : [])
-                    .map(u => String(u.User_ID))
+            const enrolledIds = new Set(
+                (enrolledResponse.data.success ? enrolledResponse.data.data || [] : [])
+                    .map(id => String(id))
             );
 
             const sectionUserIds = new Set(
@@ -535,10 +741,10 @@ function assignUserToSection(sectionId) {
             );
 
             const examinees = usersResponse.data.data
-                .filter(u => u.Role_Name === 'Examinee' && !assignedIds.has(String(u.User_ID)));
+                .filter(u => u.Role_Name === 'Examinee' && !enrolledIds.has(String(u.User_ID)));
 
             if (examinees.length === 0) {
-                Swal.fire('No examinees available', 'All examinees are already assigned to this section, or no examinees exist.', 'info');
+                Swal.fire('No examinees available', 'All examinees are already assigned to a section, or no unassigned examinees exist.', 'info');
                 return;
             }
 
@@ -553,7 +759,7 @@ function assignUserToSection(sectionId) {
             `).join('');
 
             Swal.fire({
-                title: 'Assign Examinees to Section',
+                title: 'Assign Subject',
                 html: `
                     <div class="text-start mb-2">
                         <small class="text-muted">
@@ -633,7 +839,7 @@ function assignUserToSection(sectionId) {
                     .then(response => {
                         const count = response.data.assigned_count ?? result.value.length;
                         showAlert(response.data.message || `${count} examinee(s) assigned successfully`, 'success');
-                        viewSectionUsers(sectionId);
+                        viewSectionUsers(sectionId, { reload: true });
                     })
                     .catch(error => {
                         showAlert(error.response?.data?.message || 'Error assigning examinees', 'error');
@@ -664,7 +870,7 @@ function removeFromSection(userId, sectionId) {
             })
             .then(() => {
                 showAlert('User removed from section', 'success');
-                viewSectionUsers(sectionId);
+                viewSectionUsers(sectionId, { reload: true });
             })
             .catch(error => {
                 showAlert(error.response?.data?.message || 'Error removing user', 'error');
@@ -678,6 +884,10 @@ function bootstrapCoursesPage() {
     initModals();
     bindCourseForms();
     bindCourseActions();
+    document.getElementById('filterCourse')?.addEventListener('change', function () {
+        currentCourseFilter = this.value || '';
+        renderFilteredCourses();
+    });
     loadCourses();
 }
 

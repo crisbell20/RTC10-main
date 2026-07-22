@@ -9,7 +9,7 @@ A comprehensive web-based examination system for the Philippine National Police 
 - **Batch Management**: Organize students into batches
 - **Timed Exams**: Countdown timer with auto-submit on timeout
 - **Deadline System**: Google Classroom-style deadlines for exam availability
-- **Auto-Close**: Exams automatically close 30 minutes after deadline
+- **Auto-Close**: Exams automatically close when the deadline passes
 - **Question Bank**: Centralized question repository with multiple choice support
 - **Randomization**: Optional question randomization per student
 - **Results & Reports**: Detailed exam results and performance tracking
@@ -77,7 +77,7 @@ RTC10/
 - **Schedule Date**: When exam becomes available
 - **Deadline**: When students must START the exam
 - **Duration**: How long to complete once started
-- **Auto-Close**: Closes 30 min after deadline
+- **Auto-Close**: Closes when deadline passes
 
 ### Exam Flow
 1. Admin creates exam and assigns questions
@@ -86,7 +86,7 @@ RTC10/
 4. Students start exam (timer begins)
 5. Students must answer all questions to submit
 6. Auto-submit if time expires
-7. Exam auto-closes 30 min after deadline
+7. Exam auto-closes when deadline passes
 
 ## Development
 

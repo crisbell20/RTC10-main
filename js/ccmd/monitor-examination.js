@@ -1,23 +1,26 @@
 /**
- * CCMD Live Exam Monitoring
+ * CCMD Live Exam Monitoring (no incident management — Admin resolves incidents)
  */
 
 const MONITOR_API = '../../api/ccmd/monitor.php';
+const MONITOR_REFRESH_MS = 1000;
 
 let currentExamId = null;
 let currentPage = 1;
 let refreshTimer = null;
 let searchTimer = null;
 let liveExams = [];
+let initialExamApplied = false;
 
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('refreshBtn').addEventListener('click', () => refreshAll());
     document.getElementById('examSelect').addEventListener('change', (e) => {
         currentExamId = e.target.value ? parseInt(e.target.value, 10) : null;
         currentPage = 1;
         if (currentExamId) {
             refreshAll();
             startAutoRefresh();
+        } else {
+            stopAutoRefresh();
         }
     });
     document.getElementById('statusFilter').addEventListener('change', () => {
@@ -42,10 +45,46 @@ document.addEventListener('DOMContentLoaded', () => {
         loadSessions();
     });
 
-    loadLiveExams();
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+            refreshAll();
+            startAutoRefresh();
+        } else {
+            stopAutoRefresh();
+        }
+    });
+
+    refreshLiveExamsDropdown({ useInitialExamId: true }).then((hasExams) => {
+        if (hasExams) {
+            return refreshAll();
+        }
+    }).then(() => {
+        startAutoRefresh();
+    });
 });
 
-async function loadLiveExams() {
+function stopAutoRefresh() {
+    if (refreshTimer) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+    }
+}
+
+function startAutoRefresh() {
+    stopAutoRefresh();
+    if (!currentExamId && !liveExams.length) {
+        return;
+    }
+    refreshTimer = setInterval(() => refreshAll(), MONITOR_REFRESH_MS);
+}
+
+/**
+ * Reload published exam list; preserve selected exam when possible.
+ */
+async function refreshLiveExamsDropdown(options = {}) {
+    const { preserveSelection = true, useInitialExamId = false } = options;
+    const previousId = preserveSelection ? currentExamId : null;
+
     try {
         const res = await axios.get(`${MONITOR_API}?action=live_exams`);
         if (!res.data.success) {
@@ -56,10 +95,12 @@ async function loadLiveExams() {
         const select = document.getElementById('examSelect');
 
         if (!liveExams.length) {
+            currentExamId = null;
             document.getElementById('monitorEmpty').classList.remove('d-none');
             document.getElementById('monitorBody').classList.add('d-none');
             select.innerHTML = '<option value="">No published exams</option>';
-            return;
+            stopAutoRefresh();
+            return false;
         }
 
         select.innerHTML = liveExams.map(exam => `
@@ -71,38 +112,40 @@ async function loadLiveExams() {
         document.getElementById('monitorEmpty').classList.add('d-none');
         document.getElementById('monitorBody').classList.remove('d-none');
 
-        if (typeof INITIAL_EXAM_ID === 'number' && liveExams.some(e => parseInt(e.Exam_ID, 10) === INITIAL_EXAM_ID)) {
-            currentExamId = INITIAL_EXAM_ID;
-            select.value = String(INITIAL_EXAM_ID);
+        let nextId = null;
+        if (
+            useInitialExamId &&
+            !initialExamApplied &&
+            typeof INITIAL_EXAM_ID === 'number' &&
+            liveExams.some(e => parseInt(e.Exam_ID, 10) === INITIAL_EXAM_ID)
+        ) {
+            nextId = INITIAL_EXAM_ID;
+            initialExamApplied = true;
+        } else if (previousId && liveExams.some(e => parseInt(e.Exam_ID, 10) === previousId)) {
+            nextId = previousId;
         } else {
-            currentExamId = parseInt(liveExams[0].Exam_ID, 10);
-            select.value = String(currentExamId);
+            nextId = parseInt(liveExams[0].Exam_ID, 10);
         }
 
-        refreshAll();
-        startAutoRefresh();
+        currentExamId = nextId;
+        select.value = String(currentExamId);
+        return true;
     } catch (err) {
         console.error(err);
-        Swal.fire('Error', 'Failed to load exams for monitoring', 'error');
+        if (!preserveSelection) {
+            Swal.fire('Error', 'Failed to load exams for monitoring', 'error');
+        }
+        return false;
     }
-}
-
-function startAutoRefresh() {
-    if (refreshTimer) {
-        clearInterval(refreshTimer);
-    }
-    refreshTimer = setInterval(refreshAll, 12000);
 }
 
 async function refreshAll() {
-    if (!currentExamId) return;
-    await Promise.all([
-        loadSummary(),
-        loadSessions(),
-        loadIncidents()
-    ]);
-    document.getElementById('lastUpdated').textContent =
-        'Last updated: ' + new Date().toLocaleTimeString();
+    const hasExams = await refreshLiveExamsDropdown({ preserveSelection: true });
+    if (!hasExams || !currentExamId) {
+        return;
+    }
+
+    await Promise.all([loadSummary(), loadSessions()]);
 }
 
 async function loadSummary() {
@@ -141,11 +184,10 @@ async function loadSummary() {
             </div>
             <div class="stat-card red">
                 <div class="stat-header">
-                    <div class="stat-label">Open Incidents</div>
-                    <div class="stat-icon icon-red"><i class="bi bi-exclamation-triangle"></i></div>
+                    <div class="stat-label">Not Started</div>
+                    <div class="stat-icon icon-red"><i class="bi bi-hourglass-split"></i></div>
                 </div>
-                <div class="stat-value">${d.open_incidents ?? 0}</div>
-                <div class="stat-footer"><span>${d.not_started ?? 0} not started</span></div>
+                <div class="stat-value">${d.not_started ?? 0}</div>
             </div>
         `;
     } catch (err) {
@@ -178,7 +220,7 @@ async function loadSessions() {
     } catch (err) {
         console.error('Sessions load error:', err);
         document.getElementById('sessionsTableBody').innerHTML =
-            '<tr><td colspan="6" class="text-center text-danger py-4">Failed to load sessions</td></tr>';
+            '<tr><td colspan="5" class="text-center text-danger py-4">Failed to load sessions</td></tr>';
     }
 }
 
@@ -186,7 +228,7 @@ function renderSessions(rows, pagination) {
     const tbody = document.getElementById('sessionsTableBody');
 
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No trainees match this filter</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No trainees match this filter</td></tr>';
     } else {
         tbody.innerHTML = rows.map(row => {
             const statusClass = row.status === 'in_progress' ? 'in-progress'
@@ -196,31 +238,39 @@ function renderSessions(rows, pagination) {
             const timeLeft = row.time_remaining
                 ? (row.time_remaining.expired ? 'Expired' : row.time_remaining.display)
                 : '—';
-            const flagged = row.violation_count > 0 || row.has_open_incident;
+            const isCompleted = row.status === 'completed';
+            const hasScore = isCompleted && row.score_display;
+            const questionCount = row.question_count || 0;
+            const answeredCount = row.answered_count || 0;
+            const answeredProgress = questionCount > 0
+                ? Math.min(100, Math.round((answeredCount / questionCount) * 1000) / 10)
+                : (row.answered_progress ?? row.progress ?? 0);
+            const answeredLabel = `${answeredCount}/${questionCount}`;
+            const progressLabel = hasScore ? row.score_display : answeredLabel;
+            const progressBarClass = answeredProgress >= 100 ? 'bg-success' : 'bg-primary';
+            const scoreCaption = hasScore ? `Score: ${row.score_display}` : '';
+            const progressCaption = hasScore
+                ? `${scoreCaption} • ${answeredLabel} answered`
+                : `${answeredLabel} answered`;
 
             return `
-                <tr class="${flagged ? 'row-flagged' : ''}">
+                <tr>
                     <td>
                         <strong>${escapeHtml(row.Fullname)}</strong>
-                        <div class="small text-muted">${escapeHtml(row.Academic_Number || row.Username || '')}</div>
+                        <div class="small text-muted">${escapeHtml(row.Academic_Number || '')}</div>
                     </td>
                     <td>${escapeHtml(row.batch_names || '—')}</td>
                     <td><span class="status-pill ${statusClass}">${statusLabel}</span></td>
                     <td>
                         <div class="d-flex align-items-center gap-2">
-                            <div class="progress flex-grow-1">
-                                <div class="progress-bar ${row.progress >= 100 ? 'bg-success' : 'bg-primary'}"
-                                     style="width: ${row.progress}%"></div>
+                            <div class="progress flex-grow-1" title="${escapeHtml(progressCaption)}">
+                                <div class="progress-bar ${progressBarClass}"
+                                     style="width: ${Math.min(100, answeredProgress)}%"></div>
                             </div>
-                            <small>${row.answered_count}/${row.question_count}</small>
+                            <small title="${hasScore ? 'Score' : 'Answered'}">${escapeHtml(progressLabel)}</small>
                         </div>
                     </td>
                     <td>${escapeHtml(timeLeft)}</td>
-                    <td>
-                        <span class="violation-badge ${row.violation_count > 0 ? 'has-violations' : 'clean'}">
-                            ${row.violation_count}${row.has_open_incident ? ' <i class="bi bi-exclamation-circle-fill"></i>' : ''}
-                        </span>
-                    </td>
                 </tr>
             `;
         }).join('');
@@ -232,63 +282,8 @@ function renderSessions(rows, pagination) {
     document.getElementById('nextPageBtn').disabled = (pagination.page || 1) >= (pagination.pages || 1);
 }
 
-async function loadIncidents() {
-    if (!currentExamId) return;
-
-    try {
-        const res = await axios.get(`${MONITOR_API}?action=incidents&exam_id=${currentExamId}&limit=25`);
-        if (!res.data.success) return;
-
-        const incidents = res.data.data || [];
-        const tbody = document.getElementById('incidentsTableBody');
-
-        if (!incidents.length) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No incidents recorded for this exam</td></tr>';
-            return;
-        }
-
-        tbody.innerHTML = incidents.map(inc => `
-            <tr>
-                <td>
-                    <strong>${escapeHtml(inc.Trainee_Name)}</strong>
-                    <div class="small text-muted">${escapeHtml(inc.Academic_Number || '')}</div>
-                </td>
-                <td>${escapeHtml(inc.Exam_Name)}</td>
-                <td><span class="badge bg-danger">${escapeHtml(truncate(inc.Reason, 80))}</span></td>
-                <td>${formatDateTime(inc.Timestamp)}</td>
-                <td>${inc.violation_count ?? 0}</td>
-                <td><span class="badge ${incidentStatusBadge(inc.Status)}">${escapeHtml(inc.Status)}</span></td>
-            </tr>
-        `).join('');
-    } catch (err) {
-        console.error('Incidents load error:', err);
-    }
-}
-
-function incidentStatusBadge(status) {
-    switch (status) {
-        case 'Open': return 'bg-warning text-dark';
-        case 'Reviewed': return 'bg-info';
-        case 'Dismissed': return 'bg-secondary';
-        case 'Escalated': return 'bg-danger';
-        default: return 'bg-secondary';
-    }
-}
-
-function truncate(text, max) {
-    if (!text) return '';
-    return text.length > max ? text.substring(0, max) + '…' : text;
-}
-
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text ?? '';
     return div.innerHTML;
-}
-
-function formatDateTime(dateStr) {
-    if (!dateStr) return '—';
-    const d = new Date(dateStr);
-    if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleString();
 }

@@ -9,10 +9,136 @@ let startTime = null;
 let examSubmitted = false;
 let proctoringActive = false;
 let fullscreenEnforced = false;
-const lastViolationLog = {};
+let blurWarningShown = false;
 
 const LOG_CHEATING_API = '../../api/examinee/log-cheating.php';
-const VIOLATION_COOLDOWN_MS = 3000;
+/** Short batch when tab hide / blur is already known. */
+const FOCUS_COALESCE_FAST_MS = 60;
+/** Wait for visibilitychange after fullscreen drop before calling it a fullscreen-only exit. */
+const FOCUS_COALESCE_FULLSCREEN_MS = 320;
+const FOCUS_COALESCE_DEFAULT_MS = 100;
+
+function isLikelyMobileExamClient() {
+    const ua = navigator.userAgent || '';
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+}
+
+let proctorWarningShowing = false;
+
+let focusViolationCoalesceTimer = null;
+const pendingFocusViolation = {
+    pageHidden: false,
+    windowBlur: false,
+    fullscreenExit: false,
+};
+
+function resetPendingFocusViolation() {
+    pendingFocusViolation.pageHidden = false;
+    pendingFocusViolation.windowBlur = false;
+    pendingFocusViolation.fullscreenExit = false;
+}
+
+function clearFocusViolationCoalescing() {
+    if (focusViolationCoalesceTimer !== null) {
+        clearTimeout(focusViolationCoalesceTimer);
+        focusViolationCoalesceTimer = null;
+    }
+    resetPendingFocusViolation();
+}
+
+function focusCoalesceDelayMs() {
+    if (pendingFocusViolation.pageHidden || document.hidden) {
+        return FOCUS_COALESCE_FAST_MS;
+    }
+    if (pendingFocusViolation.fullscreenExit && !pendingFocusViolation.windowBlur) {
+        return FOCUS_COALESCE_FULLSCREEN_MS;
+    }
+    return FOCUS_COALESCE_DEFAULT_MS;
+}
+
+function queueFocusViolation(kind) {
+    if (kind === 'pageHidden') pendingFocusViolation.pageHidden = true;
+    if (kind === 'windowBlur') pendingFocusViolation.windowBlur = true;
+    if (kind === 'fullscreenExit') pendingFocusViolation.fullscreenExit = true;
+
+    if (focusViolationCoalesceTimer !== null) {
+        clearTimeout(focusViolationCoalesceTimer);
+    }
+    focusViolationCoalesceTimer = setTimeout(
+        emitCoalescedFocusViolation,
+        focusCoalesceDelayMs()
+    );
+}
+
+function reportFocusPageHidden(snapshot) {
+    const hidden = snapshot.pageHidden || document.hidden;
+    if (!hidden) {
+        return false;
+    }
+
+    if (isLikelyMobileExamClient()) {
+        reportViolation(
+            'APP_BACKGROUND',
+            'App Moved to Background',
+            'The exam was moved to the background. Return to the exam immediately.',
+            null,
+            { warn: true }
+        );
+    } else {
+        reportViolation(
+            'TAB_SWITCH',
+            'Tab Switch Detected',
+            'Leaving the exam tab is not allowed. Return to the exam immediately.',
+            null,
+            { warn: true }
+        );
+    }
+    return true;
+}
+
+/**
+ * Browsers often exit fullscreen when the tab is hidden. Coalesce related signals
+ * so we log TAB_SWITCH (or APP_BACKGROUND), not a misleading FULLSCREEN_EXIT.
+ */
+function emitCoalescedFocusViolation() {
+    focusViolationCoalesceTimer = null;
+    const snapshot = { ...pendingFocusViolation };
+    resetPendingFocusViolation();
+
+    if (!proctoringActive || examSubmitted) {
+        return;
+    }
+
+    if (reportFocusPageHidden(snapshot)) {
+        return;
+    }
+
+    if (snapshot.windowBlur) {
+        const warnBlur = !blurWarningShown;
+        if (warnBlur) {
+            blurWarningShown = true;
+        }
+        reportViolation(
+            'VISIBILITY_HIDDEN',
+            'Exam Page Hidden',
+            'The exam page is no longer in focus. Keep this exam in the foreground at all times.',
+            null,
+            { warn: warnBlur }
+        );
+        return;
+    }
+
+    if (snapshot.fullscreenExit && !isFullscreen()) {
+        if (reportFocusPageHidden({ pageHidden: document.hidden })) {
+            return;
+        }
+        reportViolation(
+            'FULLSCREEN_EXIT',
+            'Fullscreen Violation',
+            'You exited fullscreen mode. Return to fullscreen to continue your exam.'
+        );
+    }
+}
 
 // Get session ID from URL
 const urlParams = new URLSearchParams(window.location.search);
@@ -42,9 +168,13 @@ async function loadExam() {
             if (questions.length === 0) {
                 throw new Error('No questions found for this exam');
             }
+
+            hydrateSavedAnswers(examData.saved_answers || {});
             
             // Check if exam time has expired
             if (examData.time_expired) {
+                document.getElementById('loadingOverlay').style.display = 'none';
+
                 Swal.fire({
                     icon: 'warning',
                     title: 'Time Expired',
@@ -61,14 +191,14 @@ async function loadExam() {
             }
             
             initializeExam();
-            renderQuestion(0);
+            renderQuestion(findResumeQuestionIndex());
             startTimer();
 
             document.getElementById('loadingOverlay').style.display = 'none';
             document.getElementById('examContainer').style.display = 'block';
 
             initProctoring();
-            enterProctorMode();
+            await enterProctorMode();
         }
     } catch (error) {
         console.error('Error loading exam:', error);
@@ -76,7 +206,7 @@ async function loadExam() {
             icon: 'error',
             title: 'Failed to Load Exam',
             text: error.response?.data?.message || 'Could not load exam questions',
-            confirmButtonText: 'Go to Dashboard'
+            confirmButtonText: 'Go to Exams'
         }).then(() => {
             window.location.href = '../examinee/dashboard.php';
         });
@@ -108,6 +238,47 @@ function initializeExam() {
     }
     
     updateProgress();
+    applyExamWatermark();
+}
+
+function getExamWatermarkText() {
+    const cfg = window.EXAM_WATERMARK || {};
+    const parts = [cfg.name, cfg.academic_number, cfg.session_id ? `Session ${cfg.session_id}` : '']
+        .filter(Boolean);
+    return parts.join(' • ') || 'PNP RTC X';
+}
+
+function applyExamWatermark() {
+    const layer = document.getElementById('examWatermarkLayer');
+    if (!layer) return;
+
+    const text = getExamWatermarkText();
+    layer.innerHTML = Array.from({ length: 18 }, () =>
+        `<span class="exam-watermark-tile">${escapeHtml(text)}</span>`
+    ).join('');
+}
+
+function hydrateSavedAnswers(savedAnswers) {
+    answers = {};
+    if (!savedAnswers || typeof savedAnswers !== 'object') {
+        return;
+    }
+
+    Object.entries(savedAnswers).forEach(([questionId, choiceId]) => {
+        if (choiceId != null && choiceId !== '') {
+            answers[questionId] = choiceId;
+        }
+    });
+}
+
+function findResumeQuestionIndex() {
+    for (let i = 0; i < questions.length; i++) {
+        const qid = questions[i].Question_ID;
+        if (answers[qid] == null) {
+            return i;
+        }
+    }
+    return 0;
 }
 
 // Render a question
@@ -323,6 +494,7 @@ async function submitExam(autoSubmit = false) {
         if (response.data.success) {
             examSubmitted = true;
             proctoringActive = false;
+            clearFocusViolationCoalescing();
             const data = response.data.data;
             const canReview = data.can_review_responses === true;
             const resultId = data.result_id;
@@ -339,9 +511,9 @@ async function submitExam(autoSubmit = false) {
                     </div>
                 `,
                 icon: data.remarks === 'Passed' ? 'success' : 'info',
-                confirmButtonText: canReview && resultId ? 'View Responses' : 'Go to Dashboard',
+                confirmButtonText: canReview && resultId ? 'View Responses' : 'Go to Exams',
                 showCancelButton: canReview && resultId,
-                cancelButtonText: 'Go to Dashboard',
+                cancelButtonText: 'Go to Exams',
                 allowOutsideClick: false
             }).then((swalResult) => {
                 if (canReview && resultId && swalResult.isConfirmed) {
@@ -374,7 +546,7 @@ window.addEventListener('beforeunload', (e) => {
     }
 });
 
-// --- Proctoring: fullscreen enforcement & tab detection ---
+// --- Proctoring: fullscreen, tab, and clipboard detection ---
 
 function isFullscreen() {
     return !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
@@ -399,24 +571,33 @@ async function requestExamFullscreen() {
     }
 }
 
-function canLogViolation(type) {
-    const now = Date.now();
-    const last = lastViolationLog[type] || 0;
-    if (now - last < VIOLATION_COOLDOWN_MS) {
-        return false;
+function reportViolation(type, title, message, e = null, options = {}) {
+    if (!proctoringActive || examSubmitted) return false;
+
+    if (e) {
+        e.preventDefault();
     }
-    lastViolationLog[type] = now;
+
+    logCheatingEvent(type);
+
+    const showWarning = options.warn !== false;
+    if (showWarning) {
+        showProctorWarning(
+            title,
+            `<p>${message}</p><p>This incident has been <strong>recorded</strong>.</p>`
+        );
+    }
+
     return true;
 }
 
-async function logCheatingEvent(type, detail = '') {
+async function logCheatingEvent(type) {
     if (!sessionId || examSubmitted) return;
 
     try {
         await axios.post(LOG_CHEATING_API, {
             session_id: sessionId,
             type,
-            detail
         });
     } catch (err) {
         console.error('Failed to log proctoring event:', err);
@@ -429,16 +610,12 @@ async function enterProctorMode() {
     proctoringActive = true;
 
     if (!entered) {
-        if (canLogViolation('FULLSCREEN_DENIED')) {
-            logCheatingEvent('FULLSCREEN_DENIED', 'Initial fullscreen request failed');
-        }
-
         const result = await Swal.fire({
             icon: 'warning',
             title: 'Fullscreen Required',
             html: `
                 <p>This exam must be taken in <strong>fullscreen mode</strong>.</p>
-                <p class="text-muted small">Exiting fullscreen or switching tabs during the exam will be recorded as a violation.</p>
+                <p class="text-muted small">Exiting fullscreen, tab-switch, switching apps, right-click, or copy/paste during the exam will be logged. Exam content is watermarked with your identity.</p>
             `,
             confirmButtonText: 'Enter Fullscreen',
             allowOutsideClick: false,
@@ -448,24 +625,37 @@ async function enterProctorMode() {
         if (result.isConfirmed) {
             const retry = await requestExamFullscreen();
             fullscreenEnforced = retry;
-            if (!retry && canLogViolation('FULLSCREEN_DENIED')) {
-                logCheatingEvent('FULLSCREEN_DENIED', 'User could not enter fullscreen after prompt');
+            if (!retry) {
+                logCheatingEvent('FULLSCREEN_DENIED');
             }
+        } else {
+            logCheatingEvent('FULLSCREEN_DENIED');
         }
     }
 }
 
 function showProctorWarning(title, message) {
-    Swal.fire({
+    const confirmButtonText = isFullscreen() ? 'Continue Exam' : 'Return to Fullscreen';
+    const config = {
         icon: 'warning',
         title,
         html: message,
-        confirmButtonText: isFullscreen() ? 'Continue Exam' : 'Return to Fullscreen',
-        allowOutsideClick: false
-    }).then(async (result) => {
+        confirmButtonText,
+        allowOutsideClick: false,
+    };
+
+    if (proctorWarningShowing && Swal.isVisible()) {
+        Swal.update(config);
+        return;
+    }
+
+    proctorWarningShowing = true;
+    Swal.fire(config).then(async (result) => {
         if (result.isConfirmed && !isFullscreen() && !examSubmitted) {
             await requestExamFullscreen();
         }
+    }).finally(() => {
+        proctorWarningShowing = false;
     });
 }
 
@@ -473,36 +663,103 @@ function handleFullscreenChange() {
     if (!proctoringActive || examSubmitted) return;
 
     if (!isFullscreen()) {
-        if (canLogViolation('FULLSCREEN_EXIT')) {
-            logCheatingEvent('FULLSCREEN_EXIT', 'Trainee exited fullscreen during exam');
-        }
-        showProctorWarning(
-            'Fullscreen Violation',
-            '<p>You exited fullscreen mode. This has been <strong>recorded</strong>.</p><p>Return to fullscreen to continue your exam.</p>'
-        );
+        queueFocusViolation('fullscreenExit');
     }
 }
 
 function handleVisibilityChange() {
     if (!proctoringActive || examSubmitted) return;
-
     if (document.hidden) {
-        if (canLogViolation('TAB_SWITCH')) {
-            logCheatingEvent('TAB_SWITCH', 'Exam page hidden — possible tab switch');
-        }
-        showProctorWarning(
-            'Tab Switch Detected',
-            '<p>Leaving the exam tab is not allowed. This incident has been <strong>recorded</strong>.</p><p>Return to the exam immediately.</p>'
-        );
+        queueFocusViolation('pageHidden');
     }
 }
 
 function handleWindowBlur() {
     if (!proctoringActive || examSubmitted || document.hidden) return;
+    queueFocusViolation('windowBlur');
+}
 
-    if (canLogViolation('WINDOW_BLUR')) {
-        logCheatingEvent('WINDOW_BLUR', 'Exam window lost focus');
+function handleCopyAttempt(e) {
+    reportViolation(
+        'COPY_ATTEMPT',
+        'Copy Not Allowed',
+        'Copying exam content is not permitted during a proctored exam.',
+        e
+    );
+}
+
+function handlePasteAttempt(e) {
+    reportViolation(
+        'PASTE_ATTEMPT',
+        'Paste Blocked',
+        'Pasting text into the exam is not allowed. You must answer without pasted content.',
+        e
+    );
+}
+
+function handleCutAttempt(e) {
+    reportViolation(
+        'CUT_ATTEMPT',
+        'Cut Not Allowed',
+        'Cutting exam content is not permitted during a proctored exam.',
+        e
+    );
+}
+
+function handleContextMenuBlock(e) {
+    if (!proctoringActive || examSubmitted) return;
+
+    const examRoot = document.getElementById('examContainer');
+    if (!examRoot || !examRoot.contains(e.target)) return;
+
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+
+    if (isMobile) {
+        reportViolation(
+            'COPY_ATTEMPT',
+            'Copy Attempt Detected',
+            'Copying or long-press actions are not allowed during a proctored exam.',
+            e
+        );
+    } else {
+        reportViolation(
+            'CONTEXT_MENU',
+            'Right-Click Disabled',
+            'Right-click is not allowed during a proctored exam.',
+            e
+        );
     }
+}
+
+const CLIPBOARD_SHORTCUTS = {
+    c: {
+        type: 'COPY_ATTEMPT',
+        title: 'Copy Not Allowed',
+        message: 'Copying exam content is not permitted during a proctored exam.'
+    },
+    v: {
+        type: 'PASTE_ATTEMPT',
+        title: 'Paste Blocked',
+        message: 'Pasting text into the exam is not allowed. You must answer without pasted content.'
+    },
+    x: {
+        type: 'CUT_ATTEMPT',
+        title: 'Cut Not Allowed',
+        message: 'Cutting exam content is not permitted during a proctored exam.'
+    }
+};
+
+function handleProctorKeydown(e) {
+    if (!proctoringActive || examSubmitted) return;
+
+    const isMac = navigator.platform.toUpperCase().includes('MAC');
+    const mod = isMac ? e.metaKey : e.ctrlKey;
+    if (!mod) return;
+
+    const shortcut = CLIPBOARD_SHORTCUTS[e.key.toLowerCase()];
+    if (!shortcut) return;
+
+    reportViolation(shortcut.type, shortcut.title, shortcut.message, e);
 }
 
 function initProctoring() {
@@ -511,6 +768,12 @@ function initProctoring() {
     document.addEventListener('MSFullscreenChange', handleFullscreenChange);
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
+
+    document.addEventListener('copy', handleCopyAttempt, true);
+    document.addEventListener('paste', handlePasteAttempt, true);
+    document.addEventListener('cut', handleCutAttempt, true);
+    document.addEventListener('contextmenu', handleContextMenuBlock, true);
+    document.addEventListener('keydown', handleProctorKeydown, true);
 }
 
 // Escape HTML

@@ -9,6 +9,8 @@ if (!isset($_SESSION['user_id']) || $_SESSION['user_role'] !== 'Examinee') {
 $userName = $_SESSION['user_name'] ?? 'User';
 $resultId = $_GET['result_id'] ?? null;
 
+require __DIR__ . '/../includes/examinee-watermark.php';
+
 if (!$resultId) {
     header('Location: dashboard.php');
     exit;
@@ -18,11 +20,13 @@ if (!$resultId) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Exam Result Details - PNP RTC X</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <link rel="stylesheet" href="../../assets/css/dashboard.css">
+    <link rel="stylesheet" href="../../assets/css/examinee-responsive.css?v=4">
+    <link rel="stylesheet" href="../../assets/css/examinee-watermark.css?v=4">
     <style>
         .result-summary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -103,7 +107,7 @@ if (!$resultId) {
         }
     </style>
 </head>
-<body>
+<body class="examinee-portal">
     <div class="top-nav">
         <div class="nav-brand">
             <h5>PNP Regional Training Center X</h5>
@@ -117,21 +121,17 @@ if (!$resultId) {
 
     <div class="dashboard-container">
         <div class="sidebar">
-            <ul class="sidebar-menu">
-                <li><a href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
-                <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
-                <li><a href="../student masterfiles/exam.php"><i class="bi bi-pencil-square"></i>Take Exam</a></li>
-                <li><a href="../student masterfiles/result.php"><i class="bi bi-clipboard-check"></i>Results</a></li>
-                <li><a href="../student masterfiles/perfomance.php"><i class="bi bi-graph-up"></i>Performance</a></li>
-                <li><a href="../student masterfiles/schedule.php"><i class="bi bi-calendar-event"></i>Schedule</a></li>
-                <li><a href="../student masterfiles/profile.php"><i class="bi bi-person-circle"></i>Profile</a></li>
-            </ul>
+            <?php
+            $examineeNavFrom = 'examinee';
+            $examineeNavActive = 'results';
+            require __DIR__ . '/../includes/examinee-sidebar.php';
+            ?>
         </div>
 
         <div class="main-content">
             <div class="mb-3">
                 <a href="dashboard.php" class="btn btn-outline">
-                    <i class="bi bi-arrow-left me-2"></i>Back to Dashboard
+                    <i class="bi bi-arrow-left me-2"></i>Back to Exams
                 </a>
             </div>
 
@@ -155,45 +155,29 @@ if (!$resultId) {
                             <p>Review your answers and see the correct solutions</p>
                         </div>
                     </div>
-                    <div class="section-body" id="questionsList">
-                        <!-- Questions will be inserted here -->
+                    <div class="section-body watermark-shield" id="questionsShield">
+                        <div id="questionsList" class="watermark-shield-content"></div>
+                        <?php renderExamineeWatermarkLayer(null, 54); ?>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
+    <?php
+    $examineeNavFrom = 'examinee';
+    $examineeNavActive = 'results';
+    require __DIR__ . '/../includes/examinee-bottom-nav.php';
+    ?>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
+    <script src="../../assets/js/logout-handler.js?v=1"></script>
+    <script src="../../assets/js/examinee-responsive-nav.js?v=1"></script>
     <script src="../../assets/js/auto-logout.js"></script>
     <script>
         const resultId = <?= json_encode($resultId) ?>;
-
-        // Logout handler
-        document.getElementById('logoutBtn').addEventListener('click', function(e) {
-            e.preventDefault();
-            Swal.fire({
-                title: 'Logout',
-                text: 'Are you sure you want to logout?',
-                icon: 'question',
-                showCancelButton: true,
-                confirmButtonText: 'Yes, logout',
-                cancelButtonText: 'No, stay',
-                confirmButtonColor: '#2563eb',
-                cancelButtonColor: '#6b7280'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    fetch('../../api/auth/logout.php', {
-                        method: 'POST'
-                    }).then(() => {
-                        window.location.href = '../../login.php';
-                    }).catch(() => {
-                        window.location.href = '../../login.php';
-                    });
-                }
-            });
-        });
 
         // Load result details
         function loadResultDetails() {

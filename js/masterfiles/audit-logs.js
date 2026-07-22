@@ -1,4 +1,5 @@
 const API = '../../api/masterfiles/audit-logs.php';
+const DEFAULT_DATE_RANGE = '30';
 
 let currentPage = 1;
 let totalPages = 1;
@@ -8,26 +9,36 @@ let metaData = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     detailModal = new bootstrap.Modal(document.getElementById('auditDetailModal'));
-    setDefaultDateRange();
     bindEvents();
     loadMeta().then(() => loadLogs());
 });
 
-function setDefaultDateRange() {
-    const to = new Date();
-    const from = new Date();
-    from.setDate(from.getDate() - 30);
-    document.getElementById('dateTo').value = formatDateInput(to);
-    document.getElementById('dateFrom').value = formatDateInput(from);
+function formatLocalDate(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
 }
 
-function formatDateInput(date) {
-    return date.toISOString().slice(0, 10);
+function getDateRangeBounds() {
+    const range = document.getElementById('filterDateRange')?.value || DEFAULT_DATE_RANGE;
+    if (range === 'all') {
+        return { date_from: '', date_to: '' };
+    }
+
+    const days = parseInt(range, 10) || parseInt(DEFAULT_DATE_RANGE, 10);
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - days);
+
+    return {
+        date_from: formatLocalDate(from),
+        date_to: formatLocalDate(to),
+    };
 }
 
 function bindEvents() {
-    document.getElementById('logoutBtn')?.addEventListener('click', handleLogout);
-    ['dateFrom', 'dateTo', 'filterModule', 'filterAction', 'filterStatus'].forEach(id => {
+    ['filterDateRange', 'filterModule', 'filterAction', 'filterStatus'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', () => {
             currentPage = 1;
             loadLogs();
@@ -48,9 +59,10 @@ function bindEvents() {
 }
 
 function getFilters() {
+    const dates = getDateRangeBounds();
     return {
-        date_from: document.getElementById('dateFrom')?.value || '',
-        date_to: document.getElementById('dateTo')?.value || '',
+        date_from: dates.date_from,
+        date_to: dates.date_to,
         module: document.getElementById('filterModule')?.value || '',
         audit_action: document.getElementById('filterAction')?.value || '',
         status: document.getElementById('filterStatus')?.value || '',
@@ -60,7 +72,14 @@ function getFilters() {
 
 function hasActiveFilters() {
     const f = getFilters();
-    return !!(f.module || f.audit_action || f.status || f.search);
+    const dateRange = document.getElementById('filterDateRange')?.value || DEFAULT_DATE_RANGE;
+    return !!(
+        f.module
+        || f.audit_action
+        || f.status
+        || f.search
+        || dateRange !== DEFAULT_DATE_RANGE
+    );
 }
 
 async function loadMeta() {
@@ -226,7 +245,7 @@ async function exportCsv() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `audit-logs-${formatDateInput(new Date())}.csv`;
+        link.download = `audit-logs-${formatLocalDate(new Date())}.csv`;
         link.click();
         URL.revokeObjectURL(url);
 
@@ -239,14 +258,16 @@ async function exportCsv() {
 function purgeOldLogs() {
     if (!window.AUDIT_LOGS_IS_ADMIN) return;
 
+    const defaultDays = metaData?.retention_days_default || 730;
+
     Swal.fire({
         title: 'Retention purge',
-        html: 'Delete audit entries older than <input id="purgeDays" type="number" class="form-control form-control-sm d-inline-block" style="width:90px" value="365" min="30" max="3650"> days?',
+        html: `Delete audit entries older than <input id="purgeDays" type="number" class="form-control form-control-sm d-inline-block" style="width:90px" value="${defaultDays}" min="30" max="3650"> days?`,
         icon: 'warning',
         showCancelButton: true,
         confirmButtonText: 'Purge old logs',
         confirmButtonColor: '#ef4444',
-        preConfirm: () => parseInt(document.getElementById('purgeDays').value, 10) || 365,
+        preConfirm: () => parseInt(document.getElementById('purgeDays').value, 10) || defaultDays,
     }).then(async result => {
         if (!result.isConfirmed) return;
         try {
@@ -262,11 +283,11 @@ function purgeOldLogs() {
 }
 
 function clearFilters() {
+    document.getElementById('filterDateRange').value = DEFAULT_DATE_RANGE;
     document.getElementById('filterModule').value = '';
     document.getElementById('filterAction').value = '';
     document.getElementById('filterStatus').value = '';
     document.getElementById('searchAudit').value = '';
-    setDefaultDateRange();
     currentPage = 1;
     loadLogs();
 }
@@ -292,22 +313,6 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text ?? '';
     return div.innerHTML;
-}
-
-function handleLogout(e) {
-    e.preventDefault();
-    Swal.fire({
-        title: 'Logout',
-        text: 'Are you sure you want to logout?',
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, logout',
-    }).then(result => {
-        if (result.isConfirmed) {
-            fetch('../../api/auth/logout.php', { method: 'POST' })
-                .finally(() => { window.location.href = '../../html/auth/login.html'; });
-        }
-    });
 }
 
 window.viewAuditDetail = viewAuditDetail;

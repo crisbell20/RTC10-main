@@ -9,6 +9,8 @@ session_start();
 
 require_once '../config/connection-pdo.php';
 require_once '../includes/exam-code-utils.php';
+require_once '../includes/exam-session-utils.php';
+require_once '../includes/validation-utils.php';
 
 function sendSuccess($data = []) {
     http_response_code(200);
@@ -37,87 +39,35 @@ if (!$session_id) {
 
 try {
     $pdo->beginTransaction();
-    
-    // Verify session
-    $stmt = $pdo->prepare('SELECT User_ID, Exam_ID, Time_Ended FROM tbl_exam_session WHERE Session_ID = ?');
-    $stmt->execute([$session_id]);
-    $session = $stmt->fetch();
-    
-    if (!$session || $session['User_ID'] != $userId) {
+
+    $context = loadActiveExamSessionContext($pdo, (int)$session_id, (int)$userId);
+    if (empty($context['valid'])) {
         $pdo->rollBack();
-        sendError('Invalid session', 403);
+        sendError($context['message'] ?? 'Invalid session', $context['status'] ?? 400);
     }
-    
-    if ($session['Time_Ended']) {
-        $pdo->rollBack();
-        sendError('Exam already submitted', 400);
-    }
-    
-    // End the session
-    $stmt = $pdo->prepare('UPDATE tbl_exam_session SET Time_Ended = NOW() WHERE Session_ID = ?');
-    $stmt->execute([$session_id]);
-    
-    // Calculate score
-    $stmt = $pdo->prepare('
-        SELECT COUNT(*) as total_questions
-        FROM tbl_exam_question
-        WHERE Exam_ID = ?
-    ');
-    $stmt->execute([$session['Exam_ID']]);
-    $total = $stmt->fetch();
-    $total_questions = $total['total_questions'];
-    
-    $stmt = $pdo->prepare('
-        SELECT COUNT(*) as correct_answers
-        FROM tbl_answer
-        WHERE Session_ID = ? AND Is_Correct = 1
-    ');
-    $stmt->execute([$session_id]);
-    $correct = $stmt->fetch();
-    $correct_answers = $correct['correct_answers'];
-    
-    $score = $correct_answers;
-    $percentage = $total_questions > 0 ? ($correct_answers / $total_questions) * 100 : 0;
-    
-    // Update or create result
-    $stmt = $pdo->prepare('SELECT Result_ID FROM tbl_result WHERE Session_ID = ?');
-    $stmt->execute([$session_id]);
-    $result = $stmt->fetch();
-    
-    // Get passing score and review setting
+
+    $session = $context['session'];
+    $payload = completeExamSessionSubmission($pdo, (int)$session_id);
+
     $hasResponseReview = responseReviewColumnExists($pdo);
     $reviewSelect = $hasResponseReview ? ', Allow_Response_Review' : '';
     $stmt = $pdo->prepare("SELECT Passing_Score{$reviewSelect} FROM tbl_exam WHERE Exam_ID = ?");
     $stmt->execute([$session['Exam_ID']]);
-    $exam = $stmt->fetch();
-    $passing_score = $exam['Passing_Score'] ?? 50;
-    $canReview = examAllowsResponseReview($exam ?: [], $hasResponseReview);
-    
-    $remarks = $percentage >= $passing_score ? 'Passed' : 'Failed';
-    $resultId = null;
-    
-    if ($result) {
-        $resultId = (int)$result['Result_ID'];
-        $stmt = $pdo->prepare('UPDATE tbl_result SET Score = ?, Percentage = ?, Remarks = ?, Submission_Date = NOW() WHERE Result_ID = ?');
-        $stmt->execute([$score, $percentage, $remarks, $resultId]);
-    } else {
-        $stmt = $pdo->prepare('INSERT INTO tbl_result (Session_ID, Score, Percentage, Remarks, Submission_Date) VALUES (?, ?, ?, ?, NOW())');
-        $stmt->execute([$session_id, $score, $percentage, $remarks]);
-        $resultId = (int)$pdo->lastInsertId();
-    }
-    
+    $exam = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $canReview = examAllowsResponseReview($exam, $hasResponseReview);
+
     $pdo->commit();
-    
+
     sendSuccess([
-        'score' => $score,
-        'total_questions' => $total_questions,
-        'percentage' => round($percentage, 2),
-        'remarks' => $remarks,
-        'passing_score' => $passing_score,
+        'score' => $payload['score'],
+        'total_questions' => $payload['total_questions'],
+        'percentage' => $payload['percentage'],
+        'remarks' => $payload['remarks'],
+        'passing_score' => $payload['passing_score'],
         'can_review_responses' => $canReview,
-        'result_id' => $resultId
+        'result_id' => $payload['result_id'],
     ]);
-    
+
 } catch (Exception $e) {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();

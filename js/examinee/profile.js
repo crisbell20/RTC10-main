@@ -6,13 +6,13 @@ const PROFILE_API = '../../api/examinee/profile.php';
 const CHANGE_PASSWORD_API = '../../api/auth/change-password.php';
 
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('logoutBtn').addEventListener('click', handleLogout);
-    document.getElementById('changePasswordBtn').addEventListener('click', openPasswordChangeModal);
+    document.getElementById('changePasswordBtn').addEventListener('click', () => openPasswordChangeModal(false));
+    document.getElementById('saveEmailBtn')?.addEventListener('click', saveProfileEmail);
     loadProfile();
 
     if (typeof MUST_CHANGE_PASSWORD !== 'undefined' && MUST_CHANGE_PASSWORD) {
         document.getElementById('passwordAlertBanner').classList.remove('d-none');
-        setTimeout(openPasswordChangeModal, 600);
+        setTimeout(() => openPasswordChangeModal(true), 600);
     }
 });
 
@@ -34,7 +34,6 @@ async function loadProfile() {
 function renderProfile(data) {
     const profile = data.profile || {};
     const enrollments = data.enrollments || [];
-    const summary = data.exam_summary || {};
 
     document.getElementById('loadingMessage').style.display = 'none';
     document.getElementById('profileContent').style.display = 'block';
@@ -57,22 +56,23 @@ function renderProfile(data) {
 
     document.getElementById('accountInfoGrid').innerHTML = [
         infoItem('Full Name', profile.Fullname),
-        infoItem('Email', profile.Email),
-        infoItem('Username', profile.Username),
         infoItem('Academic Number', profile.Academic_Number || '—'),
         infoItem('Personnel Rank', profile.Personnel_Rank || '—'),
         infoItem('Account Status', profile.Status),
         infoItem('Member Since', formatDateTime(profile.Date_Created))
     ].join('');
 
+    const emailInput = document.getElementById('profileEmailInput');
+    if (emailInput) {
+        emailInput.value = profile.Email || '';
+    }
+
     document.getElementById('securityInfoGrid').innerHTML = [
-        infoItem('Username', profile.Username),
         infoItem('Last Login', data.last_login ? formatDateTime(data.last_login) : '—'),
         infoItem('Password Status', profile.Must_Change_Password ? 'Reset required' : 'Up to date')
     ].join('');
 
     renderEnrollments(enrollments);
-    renderExamSummary(summary);
 
     if (profile.Must_Change_Password) {
         document.getElementById('passwordAlertBanner').classList.remove('d-none');
@@ -107,45 +107,11 @@ function renderEnrollments(enrollments) {
     `).join('');
 }
 
-function renderExamSummary(summary) {
-    document.getElementById('examSummaryGrid').innerHTML = [
-        statItem(summary.exams_completed ?? 0, 'Completed'),
-        statItem(summary.exams_available ?? 0, 'Available'),
-        statItem(summary.average_score > 0 ? `${summary.average_score}%` : '—', 'Average Score'),
-        statItem(`${summary.passed_count ?? 0} / ${summary.failed_count ?? 0}`, 'Passed / Failed')
-    ].join('');
-
-    const lastExamBlock = document.getElementById('lastExamBlock');
-    const lastExam = summary.last_exam;
-
-    if (lastExam && lastExam.exam_title) {
-        lastExamBlock.innerHTML = `
-            <strong><i class="bi bi-clock-history me-1"></i>Last Exam Taken</strong>
-            ${escapeHtml(lastExam.exam_title)} — ${parseFloat(lastExam.Percentage || 0).toFixed(1)}%
-            (${escapeHtml(lastExam.Remarks || 'N/A')}) on ${formatDateTime(lastExam.Submission_Date)}
-        `;
-    } else {
-        lastExamBlock.innerHTML = `
-            <strong><i class="bi bi-clock-history me-1"></i>Last Exam Taken</strong>
-            No completed exams yet.
-        `;
-    }
-}
-
 function infoItem(label, value) {
     return `
         <div class="profile-info-item">
             <label>${escapeHtml(label)}</label>
             <span>${escapeHtml(String(value ?? '—'))}</span>
-        </div>
-    `;
-}
-
-function statItem(value, label) {
-    return `
-        <div class="profile-stat-item">
-            <div class="stat-value">${escapeHtml(String(value))}</div>
-            <div class="stat-label">${escapeHtml(label)}</div>
         </div>
     `;
 }
@@ -177,48 +143,18 @@ function getInitials(name) {
     return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase();
 }
 
-function openPasswordChangeModal() {
+function openPasswordChangeModal(isFirstLoginPrompt = false) {
     Swal.fire({
-        title: 'Change Password',
-        html: `
-            <div class="text-start">
-                <label class="form-label">Current Password*</label>
-                <input type="password" id="curPwd" class="form-control mb-2">
-                <label class="form-label">New Password*</label>
-                <input type="password" id="newPwd" class="form-control mb-2">
-                <ul class="small text-muted mb-2">
-                    <li>8 characters minimum</li>
-                    <li>One uppercase letter</li>
-                    <li>One lowercase letter</li>
-                    <li>One number</li>
-                    <li>One special character</li>
-                </ul>
-                <label class="form-label">Confirm New Password*</label>
-                <input type="password" id="confPwd" class="form-control mb-2">
-                <div class="form-check mt-1">
-                    <input class="form-check-input" type="checkbox" id="togglePwdVisibility">
-                    <label class="form-check-label" for="togglePwdVisibility">Show passwords</label>
-                </div>
-            </div>
-        `,
+        title: isFirstLoginPrompt ? 'Reset Password' : 'Change Password',
+        html: getPasswordChangeFormHtml(),
         didOpen: () => {
-            const cur = document.getElementById('curPwd');
-            const next = document.getElementById('newPwd');
-            const conf = document.getElementById('confPwd');
-            const toggle = document.getElementById('togglePwdVisibility');
-            if (toggle && cur && next && conf) {
-                toggle.addEventListener('change', (e) => {
-                    const type = e.target.checked ? 'text' : 'password';
-                    cur.type = type;
-                    next.type = type;
-                    conf.type = type;
-                });
-            }
+            bindPasswordChangeFormValidation();
         },
         focusConfirm: false,
-        confirmButtonText: 'Update Password',
+        confirmButtonText: isFirstLoginPrompt ? 'Reset Password' : 'Update Password',
         showCancelButton: true,
         cancelButtonText: 'Cancel',
+        allowOutsideClick: !isFirstLoginPrompt,
         preConfirm: () => {
             const current = document.getElementById('curPwd').value;
             const next = document.getElementById('newPwd').value;
@@ -231,9 +167,22 @@ function openPasswordChangeModal() {
                 Swal.showValidationMessage('New password and confirmation do not match');
                 return false;
             }
+            if (next === current) {
+                Swal.showValidationMessage('New password must be different from your current password');
+                return false;
+            }
+            const passwordError = validatePasswordPolicy(next);
+            if (passwordError) {
+                Swal.showValidationMessage(passwordError);
+                return false;
+            }
             return { current, next, confirm };
         }
     }).then(result => {
+        if (result.dismiss === Swal.DismissReason.cancel && isFirstLoginPrompt) {
+            dismissMustChangePassword();
+            return;
+        }
         if (!result.value) return;
 
         axios.post(CHANGE_PASSWORD_API, {
@@ -247,33 +196,53 @@ function openPasswordChangeModal() {
                 loadProfile();
             } else {
                 Swal.fire('Error', res.data.message || 'Failed to update password', 'error')
-                    .then(() => openPasswordChangeModal());
+                    .then(() => openPasswordChangeModal(isFirstLoginPrompt));
             }
         }).catch(err => {
             const msg = err.response?.data?.message || 'Failed to update password';
-            Swal.fire('Error', msg, 'error').then(() => openPasswordChangeModal());
+            Swal.fire('Error', msg, 'error').then(() => openPasswordChangeModal(isFirstLoginPrompt));
         });
     });
 }
 
-function handleLogout(e) {
-    e.preventDefault();
-    Swal.fire({
-        title: 'Logout',
-        text: 'Are you sure you want to logout?',
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, logout',
-        cancelButtonText: 'No, stay',
-        confirmButtonColor: '#2563eb',
-        cancelButtonColor: '#6b7280'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            fetch('../../api/auth/logout.php', { method: 'POST' })
-                .then(() => { window.location.href = '../../login.php'; })
-                .catch(() => { window.location.href = '../../login.php'; });
+async function dismissMustChangePassword() {
+    try {
+        const res = await axios.post(CHANGE_PASSWORD_API, { action: 'dismiss_must_change' });
+        if (res.data.success) {
+            document.getElementById('passwordAlertBanner')?.classList.add('d-none');
+            Swal.fire('Notice', res.data.message || 'You can change your password later from Profile.', 'info');
+            loadProfile();
         }
-    });
+    } catch (err) {
+        Swal.fire('Error', err.response?.data?.message || 'Could not dismiss password prompt', 'error');
+    }
+}
+
+async function saveProfileEmail() {
+    const emailInput = document.getElementById('profileEmailInput');
+    const saveBtn = document.getElementById('saveEmailBtn');
+    if (!emailInput || !saveBtn) return;
+
+    const email = emailInput.value.trim();
+    if (!email) {
+        Swal.fire('Validation', 'Email is required', 'warning');
+        return;
+    }
+
+    saveBtn.disabled = true;
+    try {
+        const res = await axios.post(PROFILE_API, { email });
+        if (res.data.success) {
+            Swal.fire('Saved', res.data.data?.message || 'Email updated successfully', 'success');
+            loadProfile();
+        } else {
+            Swal.fire('Error', res.data.message || 'Failed to update email', 'error');
+        }
+    } catch (err) {
+        Swal.fire('Error', err.response?.data?.message || 'Failed to update email', 'error');
+    } finally {
+        saveBtn.disabled = false;
+    }
 }
 
 function showFatalError(message) {
@@ -282,7 +251,7 @@ function showFatalError(message) {
         title: 'Error',
         text: message,
         icon: 'error',
-        confirmButtonText: 'Go to Dashboard'
+        confirmButtonText: 'Go to Exams'
     }).then(() => {
         window.location.href = '../examinee/dashboard.php';
     });

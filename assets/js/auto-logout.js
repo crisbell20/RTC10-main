@@ -73,6 +73,18 @@
         }
     }
 
+    function redirectAfterLogout() {
+        if (typeof LogoutHandler !== 'undefined') {
+            LogoutHandler.perform();
+            return;
+        }
+
+        fetch('../../api/auth/logout.php', { method: 'POST' })
+            .finally(() => {
+                window.location.href = '../../login.php';
+            });
+    }
+
     // Logout function
     function logout() {
         // Show logout message
@@ -86,11 +98,11 @@
                 timerProgressBar: true,
                 allowOutsideClick: false
             }).then(() => {
-                window.location.href = '../../api/auth/logout.php';
+                redirectAfterLogout();
             });
         } else {
             alert('You have been logged out due to inactivity.');
-            window.location.href = '../../api/auth/logout.php';
+            redirectAfterLogout();
         }
     }
 

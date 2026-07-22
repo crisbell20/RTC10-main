@@ -9,6 +9,9 @@ session_start();
 
 require_once '../config/connection-pdo.php';
 require_once '../includes/exam-code-utils.php';
+require_once '../includes/exam-participant-utils.php';
+require_once '../includes/exam-session-utils.php';
+require_once '../includes/validation-utils.php';
 
 /**
  * Send success response
@@ -62,8 +65,8 @@ try {
     
     // Check if exam exists and is published
     $examColumns = $hasExamCode
-        ? 'Exam_ID, Title, Status, Schedule_Date, Deadline, Exam_Code, Is_Archived'
-        : 'Exam_ID, Title, Status, Schedule_Date, Deadline';
+        ? 'Exam_ID, Title, Status, Schedule_Date, Deadline, Duration, Exam_Code, Is_Archived'
+        : 'Exam_ID, Title, Status, Schedule_Date, Deadline, Duration';
 
     $examQuery = "
         SELECT {$examColumns}
@@ -116,61 +119,66 @@ try {
         $pdo->rollBack();
         sendError('You are not authorized to take this exam', 403);
     }
+
+    if (!isExamParticipant($pdo, (int)$examId, (int)$userId)) {
+        $pdo->rollBack();
+        sendError('You are not selected to take this exam. Contact your instructor.', 403);
+    }
     
     // Validate exam status is Published (Requirement 10.5, 10.6)
     if ($exam['Status'] !== 'Published') {
         $pdo->rollBack();
         sendError('This exam is not available', 400);
     }
-    
-    // Check if deadline has passed (if schedule date exists)
-    if ($exam['Schedule_Date']) {
-        $scheduleDate = strtotime($exam['Schedule_Date']);
-        $currentDate = time();
-        
-        // Allow some grace period (e.g., 24 hours after schedule date)
-        $gracePeriod = 24 * 60 * 60; // 24 hours in seconds
-        
-        if ($currentDate > ($scheduleDate + $gracePeriod)) {
-            $pdo->rollBack();
-            sendError('This exam deadline has passed', 403);
-        }
+
+    $scheduleError = validateExamScheduleStarted($exam);
+    if ($scheduleError !== null) {
+        $pdo->rollBack();
+        sendError($scheduleError, 403);
     }
     
-    // Check if examinee has already completed this exam
-    $completedQuery = "
-        SELECT Session_ID 
-        FROM tbl_exam_session 
-        WHERE User_ID = ? 
-        AND Exam_ID = ? 
-        AND Time_Ended IS NOT NULL
-    ";
-    $stmt = $pdo->prepare($completedQuery);
-    $stmt->execute([$userId, $examId]);
-    $completed = $stmt->fetch();
+    // Check if deadline has passed (same moment as auto-close — no grace period)
+    $deadlineError = validateExamDeadlineWithGrace($exam);
+    if ($deadlineError !== null) {
+        $pdo->rollBack();
+        sendError($deadlineError, 403);
+    }
     
-    if ($completed) {
+    // Remove no-answer failed / abandoned attempts so reopen retake can proceed
+    clearRetakeEligibleAttemptsForUser($pdo, (int)$userId, (int)$examId);
+
+    if (userHasCompletedExamAttempt($pdo, (int)$userId, (int)$examId)) {
         $pdo->rollBack();
         sendError('You have already completed this exam', 403);
     }
-    
+
     // Check for existing active session (not ended)
     $activeQuery = "
-        SELECT Session_ID 
-        FROM tbl_exam_session 
-        WHERE User_ID = ? 
-        AND Exam_ID = ? 
+        SELECT Session_ID, Time_Started
+        FROM tbl_exam_session
+        WHERE User_ID = ?
+        AND Exam_ID = ?
         AND Time_Ended IS NULL
     ";
     $stmt = $pdo->prepare($activeQuery);
     $stmt->execute([$userId, $examId]);
-    $activeSession = $stmt->fetch();
-    
+    $activeSession = $stmt->fetch(PDO::FETCH_ASSOC);
+
     if ($activeSession) {
-        // Resume existing session (exam code already validated when session started)
+        $sessionId = (int)$activeSession['Session_ID'];
+        $durationMinutes = (int)($exam['Duration'] ?? 0);
+
+        reviveExpiredEmptySession(
+            $pdo,
+            $sessionId,
+            (int)$examId,
+            $activeSession['Time_Started'],
+            $durationMinutes
+        );
+
         $pdo->commit();
         sendSuccess([
-            'session_id' => $activeSession['Session_ID'],
+            'session_id' => $sessionId,
             'exam_title' => $exam['Title'],
             'message' => 'Resuming existing exam session'
         ]);

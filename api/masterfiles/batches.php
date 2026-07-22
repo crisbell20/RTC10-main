@@ -10,6 +10,9 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/audit-log-utils.php';
+require_once __DIR__ . '/../includes/batch-enrollment-utils.php';
+require_once __DIR__ . '/../includes/archive-utils.php';
+require_once __DIR__ . '/../includes/validation-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -26,40 +29,6 @@ function hasUserBatchTable(PDO $pdo) {
     } catch (Exception $e) {
         return false;
     }
-}
-
-/**
- * Resolve enrollment batch for a section (creates one if missing).
- */
-function getEnrollmentBatchId(PDO $pdo, $section_id) {
-    $stmt = $pdo->prepare('SELECT Batch_ID FROM tbl_batch WHERE Section_ID = ? LIMIT 1');
-    $stmt->execute([$section_id]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($row) {
-        return (int)$row['Batch_ID'];
-    }
-
-    $sectionStmt = $pdo->prepare('
-        SELECT s.Section_ID, s.Section_Name, s.Batch_ID as Parent_Batch_ID, b.Course_ID
-        FROM tbl_academic_section s
-        INNER JOIN tbl_batch b ON s.Batch_ID = b.Batch_ID
-        WHERE s.Section_ID = ?
-    ');
-    $sectionStmt->execute([$section_id]);
-    $section = $sectionStmt->fetch(PDO::FETCH_ASSOC);
-    if (!$section) {
-        return null;
-    }
-
-    $createStmt = $pdo->prepare('INSERT INTO tbl_batch (Course_ID, Section_ID, Batch_Name, Status) VALUES (?, ?, ?, ?)');
-    $createStmt->execute([
-        $section['Course_ID'],
-        $section_id,
-        $section['Section_Name'] . ' Enrollment',
-        'Active'
-    ]);
-
-    return (int)$pdo->lastInsertId();
 }
 
 /**
@@ -164,7 +133,7 @@ function validateSectionCapacityForAssignment(PDO $pdo, $batch_id, array $user_i
     if ($info['assigned_count'] + $newAssignments > $info['capacity']) {
         return [
             'valid' => false,
-            'message' => "Section capacity exceeded. Maximum: {$info['capacity']}, Currently Assigned: {$info['assigned_count']}.",
+            'message' => formatSectionCapacityMessage($info['capacity'], $info['assigned_count']),
             'capacity' => $info['capacity'],
             'assigned_count' => $info['assigned_count'],
             'available_slots' => $info['available_slots']
@@ -214,6 +183,11 @@ function assignExamineeToBatch(PDO $pdo, $user_id, $batch_id, $status = 'Active'
     $existing->execute([$user_id, $batch_id]);
     if ($existing->fetch()) {
         return ['success' => true, 'assigned' => false, 'message' => 'User already assigned to batch'];
+    }
+
+    $singleEnrollmentError = validateExamineeSingleEnrollment($pdo, (int)$user_id, (int)$batch_id);
+    if ($singleEnrollmentError !== null) {
+        return ['success' => false, 'message' => $singleEnrollmentError, 'assigned' => false];
     }
 
     $stmt = $pdo->prepare('INSERT INTO tbl_user_batch (User_ID, Batch_ID, Status, Date_Enrolled) VALUES (?, ?, ?, NOW())');
@@ -266,11 +240,20 @@ try {
                 exit;
             }
 
+            if (batchNameExistsInCourse($pdo, (int)$course_id, $batch_name)) {
+                http_response_code(409);
+                echo json_encode(['success' => false, 'message' => 'A batch with this name already exists in this course']);
+                exit;
+            }
+
             $stmt = $pdo->prepare('INSERT INTO tbl_batch (Course_ID, Section_ID, Batch_Name, Date_Started, Date_Ended, Status) VALUES (?, NULL, ?, ?, ?, ?)');
             $stmt->execute([(int)$course_id, $batch_name, $date_started ?: null, $date_ended ?: null, 'Active']);
 
+            $batch_id = (int)$pdo->lastInsertId();
+            autoArchiveExpiredBatches($pdo, true);
+
             http_response_code(201);
-            echo json_encode(['success' => true, 'message' => 'Batch added successfully', 'batch_id' => $pdo->lastInsertId()]);
+            echo json_encode(['success' => true, 'message' => 'Batch added successfully', 'batch_id' => $batch_id]);
             exit;
         }
 
@@ -299,11 +282,20 @@ try {
         
         $course_id = $courseData['Course_ID'];
 
+        if (batchNameExistsInCourse($pdo, (int)$course_id, $batch_name)) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => 'A batch with this name already exists in this course']);
+            exit;
+        }
+
         $stmt = $pdo->prepare('INSERT INTO tbl_batch (Course_ID, Section_ID, Batch_Name, Date_Started, Date_Ended, Status) VALUES (?, ?, ?, ?, ?, ?)');
         $stmt->execute([$course_id, $section_id, $batch_name, $date_started ?: null, $date_ended ?: null, 'Active']);
 
+        $batch_id = (int)$pdo->lastInsertId();
+        autoArchiveExpiredBatches($pdo, true);
+
         http_response_code(201);
-        echo json_encode(['success' => true, 'message' => 'Batch added successfully', 'batch_id' => $pdo->lastInsertId()]);
+        echo json_encode(['success' => true, 'message' => 'Batch added successfully', 'batch_id' => $batch_id]);
         exit;
     }
 
@@ -320,30 +312,98 @@ try {
             exit;
         }
 
+        $metaStmt = $pdo->prepare('SELECT Batch_ID, Course_ID FROM tbl_batch WHERE Batch_ID = ? LIMIT 1');
+        $metaStmt->execute([(int)$batch_id]);
+        $batchMeta = $metaStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$batchMeta) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Batch not found']);
+            exit;
+        }
+
+        if (batchNameExistsInCourse($pdo, (int)$batchMeta['Course_ID'], $batch_name, (int)$batch_id)) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => 'A batch with this name already exists in this course']);
+            exit;
+        }
+
         $stmt = $pdo->prepare('UPDATE tbl_batch SET Batch_Name = ?, Date_Started = ?, Date_Ended = ? WHERE Batch_ID = ?');
         $stmt->execute([$batch_name, $date_started ?: null, $date_ended ?: null, $batch_id]);
+
+        autoArchiveExpiredBatches($pdo, true);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Batch updated successfully']);
         exit;
     }
 
-    // Delete batch
-    if ($request_method === 'POST' && $action === 'delete') {
-        $batch_id = $input['batch_id'] ?? $_POST['batch_id'] ?? '';
-
-        if (empty($batch_id)) {
+    // Archive batch
+    if ($request_method === 'POST' && $action === 'archive') {
+        $batch_id = (int)($input['batch_id'] ?? $_POST['batch_id'] ?? 0);
+        if ($batch_id <= 0) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Batch ID is required']);
             exit;
         }
 
-        $stmt = $pdo->prepare('DELETE FROM tbl_batch WHERE Batch_ID = ?');
-        $stmt->execute([$batch_id]);
+        $result = archiveBatchWithSections($pdo, $batch_id);
+        if (!$result['batch']) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Unable to archive batch. Run the archive migration first.']);
+            exit;
+        }
 
+        $batchLabel = auditBatchLabel($pdo, $batch_id);
+        auditFromSession($pdo, 'BATCH', 'ARCHIVE_BATCH', "Batch {$batchLabel} archived", 'SUCCESS', 'batch', $batch_id);
         http_response_code(200);
-        echo json_encode(['success' => true, 'message' => 'Batch deleted successfully']);
+        echo json_encode([
+            'success' => true,
+            'message' => formatCascadeArchiveMessage('batch', ['sections' => $result['sections']]),
+            'cascade' => $result,
+        ]);
         exit;
+    }
+
+    if ($request_method === 'POST' && $action === 'restore') {
+        $batch_id = (int)($input['batch_id'] ?? $_POST['batch_id'] ?? 0);
+        if ($batch_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Batch ID is required']);
+            exit;
+        }
+
+        $metaStmt = $pdo->prepare('SELECT Batch_ID, Course_ID, Section_ID FROM tbl_batch WHERE Batch_ID = ? LIMIT 1');
+        $metaStmt->execute([$batch_id]);
+        $meta = $metaStmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$meta) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Batch not found']);
+            exit;
+        }
+
+        if (!restoreRecord($pdo, 'tbl_batch', 'Batch_ID', $batch_id)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => restoreFailureMessage($pdo, 'tbl_batch', 'Batch_ID', $batch_id, 'batch')]);
+            exit;
+        }
+
+        $ancestors = restoreCurriculumAncestors($pdo, null, (int)$meta['Course_ID']);
+
+        $batchLabel = auditBatchLabel($pdo, $batch_id);
+        auditFromSession($pdo, 'BATCH', 'RESTORE_BATCH', "Batch {$batchLabel} restored", 'SUCCESS', 'batch', $batch_id);
+
+        $message = 'Batch restored successfully. Sections remain archived until restored individually from Archive.';
+        if (!empty($ancestors)) {
+            $message = 'Batch restored successfully (parent ' . implode(' and ', $ancestors) . ' also restored). Sections remain archived until restored individually from Archive.';
+        }
+
+        echo json_encode(['success' => true, 'message' => $message]);
+        exit;
+    }
+
+    if ($request_method === 'POST' && $action === 'delete') {
+        archiveDeletionBlockedResponse();
     }
 
     // ========== USER-BATCH MANAGEMENT (tbl_user_batch) ==========
@@ -390,6 +450,22 @@ try {
         exit;
     }
 
+    // All examinee user IDs with an active enrollment (for assignment pickers)
+    if ($request_method === 'GET' && $action === 'enrolled_examinee_ids') {
+        if (!hasUserBatchTable($pdo)) {
+            http_response_code(200);
+            echo json_encode(['success' => true, 'data' => []]);
+            exit;
+        }
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'data' => getEnrolledExamineeUserIds($pdo),
+        ]);
+        exit;
+    }
+
     // Get users assigned to a section
     if ($request_method === 'GET' && $action === 'users_by_section') {
         $section_id = $_GET['section_id'] ?? '';
@@ -407,7 +483,7 @@ try {
         }
 
         $stmt = $pdo->prepare("
-            SELECT DISTINCT u.User_ID, u.Fullname, u.Email, u.Username, u.Academic_Number, ub.Status, ub.Date_Enrolled
+            SELECT DISTINCT u.User_ID, u.Fullname, u.Email, u.Academic_Number, ub.Status, ub.Date_Enrolled
             FROM tbl_user_batch ub
             INNER JOIN tbl_batch b ON ub.Batch_ID = b.Batch_ID
             INNER JOIN tbl_user u ON ub.User_ID = u.User_ID
@@ -433,7 +509,7 @@ try {
         }
 
         $stmt = $pdo->prepare("
-            SELECT u.User_ID, u.Fullname, u.Email, u.Username, u.Academic_Number, ub.Status, ub.Date_Enrolled
+            SELECT u.User_ID, u.Fullname, u.Email, u.Academic_Number, ub.Status, ub.Date_Enrolled
             FROM tbl_user_batch ub
             INNER JOIN tbl_user u ON ub.User_ID = u.User_ID
             WHERE ub.Batch_ID = ?
@@ -458,13 +534,16 @@ try {
         }
 
         $stmt = $pdo->prepare("
-            SELECT b.Batch_ID, b.Batch_Name, b.Date_Started, b.Date_Ended,
+            SELECT b.Batch_ID,
+                   COALESCE(pb.Batch_Name, b.Batch_Name) AS Batch_Name,
+                   b.Date_Started, b.Date_Ended,
                    s.Section_Name, s.Section_ID,
                    c.Course_Name, c.Course_ID,
                    ub.Status, ub.Date_Enrolled
             FROM tbl_user_batch ub
             INNER JOIN tbl_batch b ON ub.Batch_ID = b.Batch_ID
-            INNER JOIN tbl_academic_section s ON b.Section_ID = s.Section_ID
+            LEFT JOIN tbl_academic_section s ON b.Section_ID = s.Section_ID
+            LEFT JOIN tbl_batch pb ON s.Batch_ID = pb.Batch_ID
             INNER JOIN tbl_course c ON b.Course_ID = c.Course_ID
             WHERE ub.User_ID = ?
             ORDER BY ub.Date_Enrolled DESC
@@ -510,7 +589,9 @@ try {
         }
 
         if (!empty($result['assigned'])) {
-            auditFromSession($pdo, 'BATCH', 'ASSIGN_USER_BATCH', "User {$user_id} assigned to batch {$batch_id}", 'SUCCESS', 'batch', (int)$batch_id);
+            $userLabel = auditUserLabel($pdo, (int)$user_id);
+            $batchLabel = auditBatchLabel($pdo, (int)$batch_id);
+            auditFromSession($pdo, 'BATCH', 'ASSIGN_USER_BATCH', "{$userLabel} assigned to batch {$batchLabel}", 'SUCCESS', 'batch', (int)$batch_id);
         }
 
         http_response_code(200);
@@ -635,7 +716,9 @@ try {
         $stmt = $pdo->prepare('DELETE FROM tbl_user_batch WHERE Batch_ID = ? AND User_ID = ?');
         $stmt->execute([$batch_id, $user_id]);
 
-        auditFromSession($pdo, 'BATCH', 'REMOVE_USER_BATCH', "User {$user_id} removed from batch {$batch_id}", 'SUCCESS', 'batch', (int)$batch_id);
+        $userLabel = auditUserLabel($pdo, (int)$user_id);
+        $batchLabel = auditBatchLabel($pdo, (int)$batch_id);
+        auditFromSession($pdo, 'BATCH', 'REMOVE_USER_BATCH', "{$userLabel} removed from batch {$batchLabel}", 'SUCCESS', 'batch', (int)$batch_id);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'User removed from batch successfully']);

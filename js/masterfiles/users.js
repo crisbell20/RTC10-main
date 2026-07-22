@@ -1,5 +1,12 @@
 const API_BASE = '../../api/masterfiles/users.php';
+const BATCHES_API = '../../api/masterfiles/batches.php';
+const COURSES_API = '../../api/masterfiles/courses.php';
+const EXAMINEE_EMAIL_SUFFIX = '@rtc.examinee.local';
+const ACADEMIC_NUMBER_PATTERN = /^[A-Z][0-9]{3}$/;
+const ACADEMIC_NUMBER_FORMAT_MESSAGE = 'Academic number must be one letter followed by 3 numbers (e.g. A001)';
 let addUserModal = new bootstrap.Modal(document.getElementById('addUserModal'));
+let bulkImportModal = null;
+let assignBatchModal = null;
 let personnelRankOptions = [];
 
 // Keep a copy of all users for filtering
@@ -7,6 +14,106 @@ let allUsers = [];
 let currentRoleFilter = 'All';
 let currentStatusFilter = 'All';
 let currentSearch = '';
+let assignCourseTree = [];
+let importCourseTree = [];
+let parsedImportRows = [];
+let importPreviewData = null;
+let adminPasswordPolicyChecklistEl = null;
+
+function initAdminPasswordPolicyValidation() {
+    adminPasswordPolicyChecklistEl = mountPasswordPolicyChecklist('adminPasswordPolicyChecklist', 'adminPwdPolicyChecklist');
+    const passwordInput = document.getElementById('password');
+    bindPasswordFieldValidation(passwordInput, adminPasswordPolicyChecklistEl);
+}
+
+function formatEmailForDisplay(email) {
+    if (!email || String(email).toLowerCase().endsWith(EXAMINEE_EMAIL_SUFFIX)) {
+        return '<small class="text-muted">—</small>';
+    }
+    return escapeHtml(email);
+}
+
+function getSelectedRoleName() {
+    const roleSelect = document.getElementById('role_id');
+    if (!roleSelect || !roleSelect.value) return '';
+    const selected = roleSelect.options[roleSelect.selectedIndex];
+    return (selected?.dataset.roleName || selected?.textContent || '').trim();
+}
+
+function updateUserFormByRole(roleName) {
+    const isExaminee = roleName === 'Examinee';
+    const emailInput = document.getElementById('email');
+    const academicInput = document.getElementById('academic_number');
+    const emailRequiredMark = document.getElementById('emailRequiredMark');
+    const academicRequiredMark = document.getElementById('academicRequiredMark');
+    const editUserId = document.getElementById('editUserId')?.value;
+    const enrollmentSection = document.getElementById('addUserEnrollmentSection');
+    const sectionSelect = document.getElementById('addUserSectionSelect');
+
+    if (academicInput) {
+        academicInput.required = isExaminee && !!editUserId;
+    }
+    if (emailInput) {
+        emailInput.required = !isExaminee;
+    }
+    if (emailRequiredMark) {
+        emailRequiredMark.style.display = isExaminee ? 'none' : '';
+    }
+    if (academicRequiredMark) {
+        academicRequiredMark.style.display = isExaminee ? '' : 'none';
+    }
+
+    if (enrollmentSection) {
+        const showEnrollment = isExaminee && !editUserId;
+        enrollmentSection.style.display = showEnrollment ? '' : 'none';
+        if (showEnrollment && assignCourseTree.length === 0) {
+            loadAddUserCourseTree();
+        } else if (showEnrollment) {
+            populateAddUserCourses();
+        }
+    }
+    if (sectionSelect) {
+        sectionSelect.required = isExaminee && !editUserId;
+    }
+
+    if (isExaminee && !editUserId) {
+        loadNextAcademicNumber();
+    }
+
+    const passwordInput = document.getElementById('password');
+    if (passwordInput && !editUserId) {
+        if (isExaminee) {
+            passwordInput.value = DEFAULT_EXAMINEE_PASSWORD;
+            passwordInput.readOnly = true;
+        } else {
+            passwordInput.readOnly = false;
+            passwordInput.value = '';
+        }
+        refreshPasswordFieldValidation(passwordInput, adminPasswordPolicyChecklistEl);
+    }
+}
+
+function loadNextAcademicNumber() {
+    const academicInput = document.getElementById('academic_number');
+    const editUserId = document.getElementById('editUserId')?.value;
+    if (!academicInput || editUserId || getSelectedRoleName() !== 'Examinee') {
+        return;
+    }
+
+    if (academicInput.value.trim() !== '') {
+        return;
+    }
+
+    axios.get(`${API_BASE}?action=next_academic_number`)
+        .then(response => {
+            if (response.data.success && response.data.data?.academic_number) {
+                academicInput.value = response.data.data.academic_number;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading next academic number:', error);
+        });
+}
 
 // Load personnel rank options
 function loadPersonnelRanks() {
@@ -86,13 +193,21 @@ function loadRoles() {
 function renderUsersTable(users) {
     const tbody = document.getElementById('usersTableBody');
     if (users.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No users found</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No users found</td></tr>';
         return;
     }
 
     tbody.innerHTML = users.map(user => {
         const batchInfo = user.Role_Name === 'Examinee' && user.batches && user.batches.length > 0
-            ? user.batches.map(b => `<small class="d-block">${escapeHtml(b.Course_Name)} → ${escapeHtml(b.Section_Name)} → ${escapeHtml(b.Batch_Name)}</small>`).join('')
+            ? (() => {
+                const activeBatches = user.batches.filter(b => b.Status === 'Active');
+                const batches = activeBatches.length > 0 ? activeBatches : user.batches;
+                const primary = batches[0];
+                const extra = batches.length > 1
+                    ? `<small class="text-warning d-block">+${batches.length - 1} more assignment(s) — remove extras manually</small>`
+                    : '';
+                return `<small class="d-block">${escapeHtml(primary.Course_Name)} → ${escapeHtml(primary.Section_Name || '—')} → ${escapeHtml(primary.Batch_Name)}</small>${extra}`;
+            })()
             : user.Role_Name === 'Examinee' 
                 ? '<small class="text-muted">Not assigned</small>'
                 : '<small class="text-muted">—</small>';
@@ -104,9 +219,8 @@ function renderUsersTable(users) {
         return `
         <tr>
             <td><strong>${escapeHtml(user.Fullname)}</strong></td>
-            <td>${escapeHtml(user.Email)}</td>
-            <td>${escapeHtml(user.Username)}</td>
-            <td>${user.Academic_Number ? escapeHtml(user.Academic_Number) : ''}</td>
+            <td>${formatEmailForDisplay(user.Email)}</td>
+            <td>${user.Academic_Number ? escapeHtml(user.Academic_Number) : '<small class="text-muted">—</small>'}</td>
             <td>${rankDisplay}</td>
             <td><span class="badge badge-info">${escapeHtml(user.Role_Name)}</span></td>
             <td>${batchInfo}</td>
@@ -124,7 +238,7 @@ function renderUsersTable(users) {
                         ${user.Role_Name === 'Examinee' ? `
                         <li>
                             <a class="dropdown-item" href="#" onclick="event.preventDefault(); assignToBatch(${user.User_ID})">
-                                <i class="bi bi-person-plus me-2"></i>Assign to Batch
+                                <i class="bi bi-person-plus me-2"></i>Assign
                             </a>
                         </li>
                         <li><hr class="dropdown-divider"></li>
@@ -136,8 +250,8 @@ function renderUsersTable(users) {
                         </li>
                         <li><hr class="dropdown-divider"></li>
                         <li>
-                            <a class="dropdown-item text-danger" href="#" onclick="event.preventDefault(); deleteUser(${user.User_ID})">
-                                <i class="bi bi-trash me-2"></i>Delete User
+                            <a class="dropdown-item" href="#" onclick="event.preventDefault(); archiveUser(${user.User_ID})">
+                                <i class="bi bi-archive me-2"></i>Archive User
                             </a>
                         </li>
                     </ul>
@@ -166,7 +280,7 @@ function applyUserFilters() {
         filtered = filtered.filter(u =>
             (u.Fullname && u.Fullname.toLowerCase().includes(term)) ||
             (u.Email && u.Email.toLowerCase().includes(term)) ||
-            (u.Username && u.Username.toLowerCase().includes(term))
+            (u.Academic_Number && u.Academic_Number.toLowerCase().includes(term))
         );
     }
 
@@ -182,6 +296,35 @@ function showAlert(message, type = 'success') {
     </div>`;
 }
 
+function isAddUserModalOpen() {
+    const modalEl = document.getElementById('addUserModal');
+    return modalEl?.classList.contains('show');
+}
+
+function showAddUserAlert(message, type = 'error') {
+    const alertDiv = document.getElementById('addUserMessageAlert');
+    if (!alertDiv) return;
+
+    alertDiv.innerHTML = `<div class="alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show" role="alert">
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>`;
+    alertDiv.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function clearAddUserAlert() {
+    const alertDiv = document.getElementById('addUserMessageAlert');
+    if (alertDiv) alertDiv.innerHTML = '';
+}
+
+function showFormAlert(message, type = 'success') {
+    if (isAddUserModalOpen()) {
+        showAddUserAlert(message, type);
+    } else {
+        showAlert(message, type);
+    }
+}
+
 // Add user form submit
 document.getElementById('addUserForm').addEventListener('submit', function(e) {
     e.preventDefault();
@@ -189,58 +332,62 @@ document.getElementById('addUserForm').addEventListener('submit', function(e) {
     // Get form values
     const fullname = document.getElementById('fullname').value.trim();
     const email = document.getElementById('email').value.trim();
-    const username = document.getElementById('username').value.trim();
+    const academicNumber = document.getElementById('academic_number').value.trim();
     const password = document.getElementById('password').value;
+    const roleName = getSelectedRoleName();
+    const isExaminee = roleName === 'Examinee';
+    const editUserIdCheck = document.getElementById('editUserId').value;
     
     // Validate fullname - only letters, spaces, dots, hyphens, apostrophes
     const namePattern = /^[a-zA-Z\s.\-']+$/;
     if (!namePattern.test(fullname)) {
-        showAlert('Full name must contain only letters, spaces, dots, hyphens, and apostrophes', 'error');
+        showFormAlert('Full name must contain only letters, spaces, dots, hyphens, and apostrophes', 'error');
         document.getElementById('fullname').focus();
         return;
     }
     
     if (fullname.length < 2 || fullname.length > 100) {
-        showAlert('Full name must be between 2 and 100 characters', 'error');
+        showFormAlert('Full name must be between 2 and 100 characters', 'error');
         document.getElementById('fullname').focus();
         return;
     }
     
-    // Validate email
-    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailPattern.test(email)) {
-        showAlert('Please enter a valid email address', 'error');
-        document.getElementById('email').focus();
-        return;
+    if (isExaminee) {
+        const normalizedAcademic = academicNumber.toUpperCase();
+        if (normalizedAcademic && !ACADEMIC_NUMBER_PATTERN.test(normalizedAcademic)) {
+            showFormAlert(ACADEMIC_NUMBER_FORMAT_MESSAGE, 'error');
+            document.getElementById('academic_number').focus();
+            return;
+        }
+        if (email) {
+            const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailPattern.test(email)) {
+                showFormAlert('Please enter a valid email address', 'error');
+                document.getElementById('email').focus();
+                return;
+            }
+        }
+        if (!editUserIdCheck) {
+            const sectionId = document.getElementById('addUserSectionSelect')?.value;
+            if (!sectionId) {
+                showFormAlert('Please select a course, batch, and section for the examinee', 'error');
+                return;
+            }
+        }
+    } else {
+        const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailPattern.test(email)) {
+            showFormAlert('Please enter a valid email address', 'error');
+            document.getElementById('email').focus();
+            return;
+        }
     }
-    
-    // Validate username - only letters, numbers, underscores, hyphens
-    const usernamePattern = /^[a-zA-Z0-9_\-]+$/;
-    const hasLetter = /[a-zA-Z]/.test(username);
-    
-    if (!usernamePattern.test(username)) {
-        showAlert('Username must contain only letters, numbers, underscores, and hyphens', 'error');
-        document.getElementById('username').focus();
-        return;
-    }
-    
-    if (!hasLetter) {
-        showAlert('Username must contain at least one letter', 'error');
-        document.getElementById('username').focus();
-        return;
-    }
-    
-    if (username.length < 3 || username.length > 50) {
-        showAlert('Username must be between 3 and 50 characters', 'error');
-        document.getElementById('username').focus();
-        return;
-    }
-    
+
     // Validate password (only if required or has value)
-    const editUserIdCheck = document.getElementById('editUserId').value;
     if (!editUserIdCheck || (password && password !== '********')) {
-        if (password.length < 6) {
-            showAlert('Password must be at least 6 characters', 'error');
+        const passwordError = validatePasswordPolicy(password);
+        if (passwordError) {
+            showFormAlert(passwordError, 'error');
             document.getElementById('password').focus();
             return;
         }
@@ -253,8 +400,7 @@ document.getElementById('addUserForm').addEventListener('submit', function(e) {
     const payload = {
         fullname: formData.get('fullname'),
         email: formData.get('email'),
-        username: formData.get('username'),
-        academic_number: formData.get('academic_number'),
+        academic_number: isExaminee ? (academicNumber ? academicNumber.toUpperCase() : '') : '',
         personnel_rank: formData.get('personnel_rank'),
         role_id: formData.get('role_id')
     };
@@ -263,9 +409,7 @@ document.getElementById('addUserForm').addEventListener('submit', function(e) {
     if (editUserId) {
         payload.action = 'update';
         payload.user_id = editUserId;
-        // Status: when editing we keep current status or default Active if not set
-        const existing = allUsers.find(u => String(u.User_ID) === String(editUserId));
-        payload.status = existing ? existing.Status : 'Active';
+        payload.status = document.getElementById('user_status').value || 'Active';
 
         // Check if password field has a value (not empty and not placeholder)
         const passwordValue = formData.get('password');
@@ -284,11 +428,15 @@ document.getElementById('addUserForm').addEventListener('submit', function(e) {
             })
             .catch(error => {
                 const message = error.response?.data?.message || 'Error updating user';
-                showAlert(message, 'error');
+                showFormAlert(message, 'error');
             });
     } else {
         payload.action = 'add';
         payload.password = formData.get('password');
+        const sectionId = document.getElementById('addUserSectionSelect')?.value;
+        if (isExaminee && sectionId) {
+            payload.section_id = sectionId;
+        }
 
         axios.post(API_BASE, payload)
             .then(response => {
@@ -301,159 +449,202 @@ document.getElementById('addUserForm').addEventListener('submit', function(e) {
             })
             .catch(error => {
                 const message = error.response?.data?.message || 'Error adding user';
-                showAlert(message, 'error');
+                showFormAlert(message, 'error');
             });
     }
 });
 
-// Reload roles when modal is shown
-document.getElementById('addUserModal').addEventListener('show.bs.modal', function() {
-    loadRoles();
-    loadPersonnelRanks();
-    // Reset password field to editable/empty by default
+function resetAddUserModal() {
+    const form = document.getElementById('addUserForm');
     const passwordInput = document.getElementById('password');
     const passwordOptionalLabel = document.getElementById('passwordOptionalLabel');
     const passwordHint = document.getElementById('passwordHint');
-    
+    const editIdInput = document.getElementById('editUserId');
+    const submitBtn = document.getElementById('addUserSubmitBtn');
+    const titleEl = document.getElementById('addUserModalLabel');
+    const userStatusSection = document.getElementById('userStatusSection');
+
+    if (form) form.reset();
+    if (editIdInput) editIdInput.value = '';
     if (passwordInput) {
         passwordInput.readOnly = false;
         passwordInput.value = '';
         passwordInput.required = true;
+        passwordInput.placeholder = '';
+        setInputValidationState(passwordInput, null);
     }
     if (passwordOptionalLabel) {
         passwordOptionalLabel.style.display = 'none';
     }
     if (passwordHint) {
-        passwordHint.textContent = '';
+        passwordHint.textContent = '8+ characters with upper, lower, number, and special character';
     }
-    
-    // Reset edit state
-    const editIdInput = document.getElementById('editUserId');
-    const submitBtn = document.getElementById('addUserSubmitBtn');
-    const titleEl = document.getElementById('addUserModalLabel');
-    if (editIdInput) editIdInput.value = '';
     if (submitBtn) submitBtn.textContent = 'Add User';
     if (titleEl) titleEl.textContent = 'Add New User';
-    
-    // Hide batch enrollment section when adding new user
-    hideBatchEnrollmentSection();
-    populatePersonnelRankSelect('');
-});
+    if (userStatusSection) userStatusSection.style.display = 'none';
 
-// Add to Batch button handler
-document.getElementById('addToBatchBtn').addEventListener('click', function() {
-    const editIdInput = document.getElementById('editUserId');
-    const userId = editIdInput ? editIdInput.value : '';
-    
-    if (!userId) {
-        showAlert('Please save the user first before adding to batch', 'error');
+    clearAddUserAlert();
+    populatePersonnelRankSelect('');
+    resetAddUserEnrollmentSelects();
+    updateUserFormByRole('');
+    initAdminPasswordPolicyValidation();
+}
+
+function resetAddUserEnrollmentSelects() {
+    const courseSelect = document.getElementById('addUserCourseSelect');
+    const batchSelect = document.getElementById('addUserBatchSelect');
+    const sectionSelect = document.getElementById('addUserSectionSelect');
+
+    if (courseSelect) {
+        courseSelect.innerHTML = '<option value="">Select a course</option>';
+    }
+    if (batchSelect) {
+        batchSelect.innerHTML = '<option value="">Select a batch</option>';
+        batchSelect.disabled = true;
+    }
+    if (sectionSelect) {
+        sectionSelect.innerHTML = '<option value="">Select a section</option>';
+        sectionSelect.disabled = true;
+    }
+}
+
+function loadAddUserCourseTree() {
+    return axios.get(`${COURSES_API}?action=tree`)
+        .then(response => {
+            if (response.data.success) {
+                assignCourseTree = response.data.data || [];
+                populateAddUserCourses();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading courses for add user:', error);
+        });
+}
+
+function populateAddUserCourses() {
+    const courseSelect = document.getElementById('addUserCourseSelect');
+    if (!courseSelect) return;
+
+    resetAddUserEnrollmentSelects();
+    assignCourseTree.forEach(course => {
+        const option = document.createElement('option');
+        option.value = course.Course_ID;
+        option.textContent = course.Course_Name;
+        courseSelect.appendChild(option);
+    });
+}
+
+function populateAddUserBatches(courseId) {
+    const batchSelect = document.getElementById('addUserBatchSelect');
+    const sectionSelect = document.getElementById('addUserSectionSelect');
+    if (!batchSelect || !sectionSelect) return;
+
+    batchSelect.innerHTML = '<option value="">Select a batch</option>';
+    sectionSelect.innerHTML = '<option value="">Select a section</option>';
+    sectionSelect.disabled = true;
+
+    if (!courseId) {
+        batchSelect.disabled = true;
         return;
     }
-    
-    // Load all batches
-    const batchSelect = document.getElementById('addToBatchSelect');
-    batchSelect.innerHTML = '<option value="">Loading batches...</option>';
-    
-    axios.get('../../api/masterfiles/courses.php?action=list')
-        .then(response => {
-            if (response.data.success) {
-                batchSelect.innerHTML = '<option value="">Select a batch</option>';
-                
-                response.data.data.forEach(course => {
-                    if (course.sections) {
-                        course.sections.forEach(section => {
-                            if (section.batches) {
-                                section.batches.forEach(batch => {
-                                    const option = document.createElement('option');
-                                    option.value = batch.Batch_ID;
-                                    option.textContent = `${course.Course_Name} → ${section.Section_Name} → ${batch.Batch_Name}`;
-                                    batchSelect.appendChild(option);
-                                });
-                            }
-                        });
-                    }
-                });
-                
-                document.getElementById('addToBatchUserId').value = userId;
-                new bootstrap.Modal(document.getElementById('addToBatchModal')).show();
-            }
-        })
-        .catch(error => {
-            console.error('Error loading batches:', error);
-            showAlert('Error loading batches', 'error');
-        });
-});
 
-// Add to Batch form handler
-document.getElementById('addToBatchForm').addEventListener('submit', function(e) {
-    e.preventDefault();
-    const formData = new FormData(this);
-    const data = {
-        user_id: formData.get('user_id'),
-        batch_id: formData.get('batch_id'),
-        action: 'assign_user'
-    };
+    const course = assignCourseTree.find(c => String(c.Course_ID) === String(courseId));
+    const batches = course && course.batches ? course.batches : [];
 
-    axios.post('../../api/masterfiles/batches.php', data)
-        .then(response => {
-            if (response.data.success) {
-                showAlert('Examinee added to batch successfully', 'success');
-                this.reset();
-                bootstrap.Modal.getInstance(document.getElementById('addToBatchModal')).hide();
-                loadUserBatches(data.user_id);
-                loadUsers(); // Refresh main user list
-            }
-        })
-        .catch(error => {
-            showAlert(error.response?.data?.message || 'Error adding to batch', 'error');
-        });
-});
+    batches.forEach(batch => {
+        const option = document.createElement('option');
+        option.value = batch.Batch_ID;
+        option.textContent = batch.Batch_Name;
+        batchSelect.appendChild(option);
+    });
 
-// When role changes, auto-fill default password for Examinee
-document.getElementById('role_id').addEventListener('change', function () {
-    const roleSelect = this;
-    const passwordInput = document.getElementById('password');
-    if (!passwordInput) return;
+    batchSelect.disabled = batches.length === 0;
+}
 
-    const selected = roleSelect.options[roleSelect.selectedIndex];
-    const roleName = selected ? (selected.dataset.roleName || selected.textContent).trim() : '';
+function populateAddUserSections(batchId) {
+    const sectionSelect = document.getElementById('addUserSectionSelect');
+    if (!sectionSelect) return;
 
-    if (roleName === 'Examinee') {
-        // Show and lock the default password
-        passwordInput.value = 'PNPRTC10';
-        passwordInput.readOnly = true;
-    } else {
-        // Allow manual password entry for other roles
-        passwordInput.readOnly = false;
-        passwordInput.value = '';
+    sectionSelect.innerHTML = '<option value="">Select a section</option>';
+
+    if (!batchId) {
+        sectionSelect.disabled = true;
+        return;
     }
+
+    let sections = [];
+    assignCourseTree.forEach(course => {
+        if (course.batches) {
+            const batch = course.batches.find(b => String(b.Batch_ID) === String(batchId));
+            if (batch && batch.sections) {
+                sections = batch.sections;
+            }
+        }
+    });
+
+    sections.forEach(section => {
+        const option = document.createElement('option');
+        option.value = section.Section_ID;
+        option.textContent = section.Section_Name;
+        sectionSelect.appendChild(option);
+    });
+
+    sectionSelect.disabled = sections.length === 0;
+}
+
+document.getElementById('addUserCourseSelect')?.addEventListener('change', function () {
+    populateAddUserBatches(this.value);
 });
 
-// Delete user
-function deleteUser(userId) {
+document.getElementById('addUserBatchSelect')?.addEventListener('change', function () {
+    populateAddUserSections(this.value);
+});
+
+document.getElementById('openAddUserModalBtn').addEventListener('click', resetAddUserModal);
+
+document.getElementById('addUserModal').addEventListener('show.bs.modal', function() {
+    loadRoles();
+    loadPersonnelRanks();
+});
+
+document.getElementById('addUserModal').addEventListener('hidden.bs.modal', function() {
+    const editIdInput = document.getElementById('editUserId');
+    const userStatusSection = document.getElementById('userStatusSection');
+    if (editIdInput) editIdInput.value = '';
+    if (userStatusSection) userStatusSection.style.display = 'none';
+    clearAddUserAlert();
+});
+
+// When role changes, adjust form fields and default password
+document.getElementById('role_id').addEventListener('change', function () {
+    updateUserFormByRole(getSelectedRoleName());
+});
+
+// Archive user
+function archiveUser(userId) {
     Swal.fire({
-        title: 'Delete User?',
-        text: 'This action cannot be undone',
+        title: 'Archive User?',
+        html: 'The user will be hidden from active lists and permanently removed after <strong>2 years</strong>. You can restore them from the Archive page.',
         icon: 'warning',
         showCancelButton: true,
-        confirmButtonText: 'Yes, delete',
+        confirmButtonText: 'Archive',
         cancelButtonText: 'Cancel',
-        confirmButtonColor: '#ef4444',
+        confirmButtonColor: '#d97706',
         cancelButtonColor: '#6b7280'
     }).then((result) => {
         if (result.isConfirmed) {
             axios.post(API_BASE, {
-                action: 'delete',
+                action: 'archive',
                 user_id: userId
             })
             .then(response => {
                 if (response.data.success) {
-                    showAlert('User deleted successfully', 'success');
+                    showAlert('User archived successfully', 'success');
                     loadUsers();
                 }
             })
             .catch(error => {
-                const message = error.response?.data?.message || 'Error deleting user';
+                const message = error.response?.data?.message || 'Error archiving user';
                 showAlert(message, 'error');
             });
         }
@@ -471,7 +662,6 @@ function editUser(userId) {
     const editIdInput = document.getElementById('editUserId');
     const fullnameInput = document.getElementById('fullname');
     const emailInput = document.getElementById('email');
-    const usernameInput = document.getElementById('username');
     const academicInput = document.getElementById('academic_number');
     const roleSelect = document.getElementById('role_id');
     const passwordInput = document.getElementById('password');
@@ -479,11 +669,17 @@ function editUser(userId) {
     const passwordHint = document.getElementById('passwordHint');
     const submitBtn = document.getElementById('addUserSubmitBtn');
     const titleEl = document.getElementById('addUserModalLabel');
+    const userStatusSelect = document.getElementById('user_status');
+    const userStatusSection = document.getElementById('userStatusSection');
 
     if (editIdInput) editIdInput.value = user.User_ID;
     if (fullnameInput) fullnameInput.value = user.Fullname || '';
-    if (emailInput) emailInput.value = user.Email || '';
-    if (usernameInput) usernameInput.value = user.Username || '';
+    if (emailInput) {
+        const displayEmail = user.Email && !String(user.Email).toLowerCase().endsWith(EXAMINEE_EMAIL_SUFFIX)
+            ? user.Email
+            : '';
+        emailInput.value = displayEmail;
+    }
     if (academicInput) academicInput.value = user.Academic_Number || '';
     populatePersonnelRankSelect(user.Personnel_Rank || '');
 
@@ -495,18 +691,15 @@ function editUser(userId) {
             for (let i = 0; i < roleSelect.options.length; i++) {
                 if (roleSelect.options[i].text.trim() === user.Role_Name) {
                     roleSelect.selectedIndex = i;
+                    updateUserFormByRole(user.Role_Name);
                     break;
                 }
             }
         }
-        
-        // Show batch enrollment section if user is Examinee
-        if (user.Role_Name === 'Examinee') {
-            showBatchEnrollmentSection(user.User_ID);
-        } else {
-            hideBatchEnrollmentSection();
-        }
     }, 200);
+
+    if (userStatusSection) userStatusSection.style.display = 'block';
+    if (userStatusSelect) userStatusSelect.value = user.Status || 'Active';
 
     // Make password optional for editing (can reset password here)
     if (passwordInput) {
@@ -524,162 +717,194 @@ function editUser(userId) {
         passwordHint.textContent = 'Enter a new password only if you want to reset it';
     }
 
+    initAdminPasswordPolicyValidation();
+
     if (submitBtn) submitBtn.textContent = 'Save Changes';
     if (titleEl) titleEl.textContent = 'Edit User';
 
     addUserModal.show();
 }
 
-// Show batch enrollment section and load user's batches
-function showBatchEnrollmentSection(userId) {
-    const section = document.getElementById('batchEnrollmentSection');
-    if (section) {
-        section.style.display = 'block';
-        loadUserBatches(userId);
+function resetAssignSelects() {
+    const courseSelect = document.getElementById('assignCourseSelect');
+    const batchSelect = document.getElementById('assignParentBatchSelect');
+    const sectionSelect = document.getElementById('assignSectionSelect');
+
+    if (courseSelect) {
+        courseSelect.innerHTML = '<option value="">Select a course</option>';
+    }
+    if (batchSelect) {
+        batchSelect.innerHTML = '<option value="">Select a batch</option>';
+        batchSelect.disabled = true;
+    }
+    if (sectionSelect) {
+        sectionSelect.innerHTML = '<option value="">Select a section</option>';
+        sectionSelect.disabled = true;
     }
 }
 
-// Hide batch enrollment section
-function hideBatchEnrollmentSection() {
-    const section = document.getElementById('batchEnrollmentSection');
-    if (section) {
-        section.style.display = 'none';
-    }
-}
+function populateAssignCourses() {
+    const courseSelect = document.getElementById('assignCourseSelect');
+    if (!courseSelect) return;
 
-// Load user's enrolled batches
-function loadUserBatches(userId) {
-    const container = document.getElementById('userBatchList');
-    if (!container) return;
-    
-    container.innerHTML = '<p class="text-muted text-center py-2 mb-0"><i class="bi bi-hourglass-split"></i> Loading...</p>';
-    
-    axios.get(`../../api/masterfiles/batches.php?action=batches_by_user&user_id=${userId}`)
-        .then(response => {
-            if (response.data.success) {
-                const batches = response.data.data || [];
-                if (batches.length === 0) {
-                    container.innerHTML = '<p class="text-muted text-center py-2 mb-0">No batches assigned</p>';
-                } else {
-                    container.innerHTML = batches.map(batch => `
-                        <div class="d-flex justify-content-between align-items-center p-2 border-bottom">
-                            <div>
-                                <strong>${escapeHtml(batch.Batch_Name)}</strong>
-                                <br>
-                                <small class="text-muted">
-                                    ${escapeHtml(batch.Course_Name)} → ${escapeHtml(batch.Section_Name)}
-                                </small>
-                                <br>
-                                <small>
-                                    <span class="badge ${batch.Status === 'Active' ? 'bg-success' : 'bg-secondary'}">${escapeHtml(batch.Status)}</span>
-                                    Enrolled: ${new Date(batch.Date_Enrolled).toLocaleDateString()}
-                                </small>
-                            </div>
-                            <button type="button" class="btn btn-sm btn-outline-danger" 
-                                    onclick="removeFromBatch(${userId}, ${batch.Batch_ID}, '${escapeHtml(batch.Batch_Name)}')">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </div>
-                    `).join('');
-                }
-            }
-        })
-        .catch(error => {
-            console.error('Error loading user batches:', error);
-            container.innerHTML = '<p class="text-danger text-center py-2 mb-0">Error loading batches</p>';
-        });
-}
-
-// Remove user from batch
-function removeFromBatch(userId, batchId, batchName) {
-    Swal.fire({
-        title: 'Remove from Batch?',
-        text: `Remove this examinee from ${batchName}?`,
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, remove',
-        cancelButtonText: 'Cancel',
-        confirmButtonColor: '#ef4444',
-        cancelButtonColor: '#6b7280'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            axios.post('../../api/masterfiles/batches.php', {
-                action: 'remove_user',
-                user_id: userId,
-                batch_id: batchId
-            })
-            .then(response => {
-                if (response.data.success) {
-                    showAlert('Examinee removed from batch successfully', 'success');
-                    loadUserBatches(userId);
-                    loadUsers(); // Refresh main user list
-                }
-            })
-            .catch(error => {
-                const message = error.response?.data?.message || 'Error removing from batch';
-                showAlert(message, 'error');
-            });
-        }
+    resetAssignSelects();
+    assignCourseTree.forEach(course => {
+        const option = document.createElement('option');
+        option.value = course.Course_ID;
+        option.textContent = course.Course_Name;
+        courseSelect.appendChild(option);
     });
 }
 
-// Assign examinee to batch
+function populateAssignBatches(courseId) {
+    const batchSelect = document.getElementById('assignParentBatchSelect');
+    const sectionSelect = document.getElementById('assignSectionSelect');
+    if (!batchSelect || !sectionSelect) return;
+
+    batchSelect.innerHTML = '<option value="">Select a batch</option>';
+    sectionSelect.innerHTML = '<option value="">Select a section</option>';
+    sectionSelect.disabled = true;
+
+    if (!courseId) {
+        batchSelect.disabled = true;
+        return;
+    }
+
+    const course = assignCourseTree.find(c => String(c.Course_ID) === String(courseId));
+    const batches = course && course.batches ? course.batches : [];
+
+    batches.forEach(batch => {
+        const option = document.createElement('option');
+        option.value = batch.Batch_ID;
+        option.textContent = batch.Batch_Name;
+        batchSelect.appendChild(option);
+    });
+
+    batchSelect.disabled = batches.length === 0;
+}
+
+function populateAssignSections(batchId) {
+    const sectionSelect = document.getElementById('assignSectionSelect');
+    if (!sectionSelect) return;
+
+    sectionSelect.innerHTML = '<option value="">Select a section</option>';
+
+    if (!batchId) {
+        sectionSelect.disabled = true;
+        return;
+    }
+
+    let sections = [];
+    assignCourseTree.forEach(course => {
+        if (course.batches) {
+            const batch = course.batches.find(b => String(b.Batch_ID) === String(batchId));
+            if (batch && batch.sections) {
+                sections = batch.sections;
+            }
+        }
+    });
+
+    sections.forEach(section => {
+        const option = document.createElement('option');
+        option.value = section.Section_ID;
+        option.textContent = section.Section_Name;
+        sectionSelect.appendChild(option);
+    });
+
+    sectionSelect.disabled = sections.length === 0;
+}
+
+// Assign examinee to course/batch/section
 function assignToBatch(userId) {
     document.getElementById('assignUserId').value = userId;
-    
-    // Load all batches
-    axios.get('../../api/masterfiles/courses.php?action=list')
-        .then(response => {
-            if (response.data.success) {
-                const batchSelect = document.getElementById('batchSelect');
-                batchSelect.innerHTML = '<option value="">Select a batch</option>';
-                
-                response.data.data.forEach(course => {
-                    if (course.sections) {
-                        course.sections.forEach(section => {
-                            if (section.batches) {
-                                section.batches.forEach(batch => {
-                                    const option = document.createElement('option');
-                                    option.value = batch.Batch_ID;
-                                    option.textContent = `${course.Course_Name} → ${section.Section_Name} → ${batch.Batch_Name}`;
-                                    batchSelect.appendChild(option);
-                                });
-                            }
-                        });
-                    }
-                });
-                
-                new bootstrap.Modal(document.getElementById('assignBatchModal')).show();
+
+    const warningEl = document.getElementById('assignEnrollmentWarning');
+    if (warningEl) {
+        warningEl.classList.add('d-none');
+        warningEl.textContent = '';
+    }
+
+    if (!assignBatchModal) {
+        assignBatchModal = new bootstrap.Modal(document.getElementById('assignBatchModal'));
+    }
+
+    Promise.all([
+        axios.get(`${COURSES_API}?action=tree`),
+        axios.get(`${BATCHES_API}?action=batches_by_user&user_id=${userId}`)
+    ])
+        .then(([coursesResponse, batchesResponse]) => {
+            if (!coursesResponse.data.success) {
+                showAlert('Error loading courses', 'error');
+                return;
             }
+
+            const submitBtn = document.getElementById('assignBatchSubmitBtn');
+            assignCourseTree = coursesResponse.data.data || [];
+            populateAssignCourses();
+
+            const enrollments = (batchesResponse.data.success ? batchesResponse.data.data || [] : [])
+                .filter(b => b.Status === 'Active');
+            if (submitBtn) {
+                submitBtn.disabled = enrollments.length > 0;
+            }
+            if (warningEl && enrollments.length > 0) {
+                const label = enrollments.map(b =>
+                    `${b.Course_Name} → ${b.Section_Name || '—'} → ${b.Batch_Name}`
+                ).join('; ');
+                warningEl.textContent = `This examinee is already assigned to ${label}. Remove them from that assignment before assigning elsewhere.`;
+                warningEl.classList.remove('d-none');
+            }
+
+            assignBatchModal.show();
         })
         .catch(error => {
-            console.error('Error loading batches:', error);
-            alert('Error loading batches');
+            console.error('Error loading assignment data:', error);
+            showAlert('Error loading assignment data', 'error');
         });
 }
 
-// Assign batch form handler
+document.getElementById('assignCourseSelect').addEventListener('change', function() {
+    populateAssignBatches(this.value);
+});
+
+document.getElementById('assignParentBatchSelect').addEventListener('change', function() {
+    populateAssignSections(this.value);
+});
+
+// Assign form handler
 document.getElementById('assignBatchForm').addEventListener('submit', function(e) {
     e.preventDefault();
     const formData = new FormData(this);
+    const userId = formData.get('user_id');
+    const sectionId = formData.get('section_id');
+
+    if (!userId || !sectionId) {
+        showAlert('Please select a course, batch, and section', 'error');
+        return;
+    }
+
     const data = {
-        user_id: formData.get('user_id'),
-        batch_id: formData.get('batch_id'),
-        status: formData.get('status'),
-        action: 'assign_user'
+        user_ids: [userId],
+        section_id: sectionId,
+        status: 'Active',
+        action: 'assign_users'
     };
 
-    axios.post('../../api/masterfiles/batches.php', data)
+    axios.post(BATCHES_API, data)
         .then(response => {
             if (response.data.success) {
-                showAlert('Examinee assigned to batch successfully', 'success');
+                showAlert('Examinee assigned successfully', 'success');
                 this.reset();
-                bootstrap.Modal.getInstance(document.getElementById('assignBatchModal')).hide();
+                if (assignBatchModal) {
+                    assignBatchModal.hide();
+                } else {
+                    bootstrap.Modal.getInstance(document.getElementById('assignBatchModal'))?.hide();
+                }
                 loadUsers();
             }
         })
         .catch(error => {
-            showAlert(error.response?.data?.message || 'Error assigning to batch', 'error');
+            showAlert(error.response?.data?.message || 'Error assigning examinee', 'error');
         });
 });
 
@@ -688,6 +913,329 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+function normalizeImportHeader(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s.]+/g, '_');
+}
+
+function mapImportRow(rawRow, rowNumber) {
+    const mapped = { _row: rowNumber };
+    Object.keys(rawRow || {}).forEach(key => {
+        const normalizedKey = normalizeImportHeader(key);
+        const value = rawRow[key];
+        if (normalizedKey === 'full_name' || normalizedKey === 'fullname' || normalizedKey === 'name') {
+            mapped.Fullname = value;
+        } else if (normalizedKey === 'academic_number' || normalizedKey === 'academic_no') {
+            mapped.Academic_Number = value;
+        } else if (normalizedKey === 'personnel_rank' || normalizedKey === 'rank') {
+            mapped.Personnel_Rank = String(value || '').trim().toUpperCase();
+        } else if (normalizedKey === 'email') {
+            mapped.Email = value;
+        }
+    });
+    return mapped;
+}
+
+function parseImportFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheetName = workbook.SheetNames[0];
+                const sheet = workbook.Sheets[sheetName];
+                const jsonRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+                const rows = jsonRows
+                    .map((row, index) => mapImportRow(row, index + 2))
+                    .filter(row => {
+                        const hasName = String(row.Fullname || '').trim() !== '';
+                        const hasAcademic = String(row.Academic_Number || '').trim() !== '';
+                        return hasName || hasAcademic;
+                    });
+                resolve(rows);
+            } catch (err) {
+                reject(err);
+            }
+        };
+        reader.onerror = () => reject(new Error('Unable to read file'));
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+function resetImportPreview() {
+    importPreviewData = null;
+    parsedImportRows = [];
+    document.getElementById('importPreviewWrap').style.display = 'none';
+    document.getElementById('importPreviewBody').innerHTML = '';
+    document.getElementById('importSummary').classList.add('d-none');
+    document.getElementById('importSummary').textContent = '';
+    document.getElementById('importCapacityInfo').classList.add('d-none');
+    document.getElementById('commitImportBtn').disabled = true;
+}
+
+function resetImportModal() {
+    resetImportPreview();
+    document.getElementById('importFile').value = '';
+    document.getElementById('previewImportBtn').disabled = true;
+    populateImportCourses();
+}
+
+function populateImportCourses() {
+    const courseSelect = document.getElementById('importCourseSelect');
+    const batchSelect = document.getElementById('importBatchSelect');
+    const sectionSelect = document.getElementById('importSectionSelect');
+    if (!courseSelect) return;
+
+    courseSelect.innerHTML = '<option value="">Select a course</option>';
+    batchSelect.innerHTML = '<option value="">Select a batch</option>';
+    sectionSelect.innerHTML = '<option value="">Select a section</option>';
+    batchSelect.disabled = true;
+    sectionSelect.disabled = true;
+
+    importCourseTree.forEach(course => {
+        const option = document.createElement('option');
+        option.value = course.Course_ID;
+        option.textContent = course.Course_Name;
+        courseSelect.appendChild(option);
+    });
+}
+
+function populateImportBatches(courseId) {
+    const batchSelect = document.getElementById('importBatchSelect');
+    const sectionSelect = document.getElementById('importSectionSelect');
+    if (!batchSelect || !sectionSelect) return;
+
+    batchSelect.innerHTML = '<option value="">Select a batch</option>';
+    sectionSelect.innerHTML = '<option value="">Select a section</option>';
+    sectionSelect.disabled = true;
+
+    if (!courseId) {
+        batchSelect.disabled = true;
+        return;
+    }
+
+    const course = importCourseTree.find(c => String(c.Course_ID) === String(courseId));
+    const batches = course && course.batches ? course.batches : [];
+    batches.forEach(batch => {
+        const option = document.createElement('option');
+        option.value = batch.Batch_ID;
+        option.textContent = batch.Batch_Name;
+        batchSelect.appendChild(option);
+    });
+    batchSelect.disabled = batches.length === 0;
+}
+
+function populateImportSections(batchId) {
+    const sectionSelect = document.getElementById('importSectionSelect');
+    if (!sectionSelect) return;
+
+    sectionSelect.innerHTML = '<option value="">Select a section</option>';
+    if (!batchId) {
+        sectionSelect.disabled = true;
+        return;
+    }
+
+    let sections = [];
+    importCourseTree.forEach(course => {
+        if (course.batches) {
+            const batch = course.batches.find(b => String(b.Batch_ID) === String(batchId));
+            if (batch && batch.sections) {
+                sections = batch.sections;
+            }
+        }
+    });
+
+    sections.forEach(section => {
+        const option = document.createElement('option');
+        option.value = section.Section_ID;
+        option.textContent = section.Section_Name;
+        sectionSelect.appendChild(option);
+    });
+    sectionSelect.disabled = sections.length === 0;
+}
+
+function updateImportActionState() {
+    const sectionId = document.getElementById('importSectionSelect')?.value;
+    const hasFile = parsedImportRows.length > 0;
+    document.getElementById('previewImportBtn').disabled = !(sectionId && hasFile);
+    if (!sectionId || !hasFile) {
+        resetImportPreview();
+    }
+}
+
+function renderImportPreview(data) {
+    const wrap = document.getElementById('importPreviewWrap');
+    const body = document.getElementById('importPreviewBody');
+    const summaryEl = document.getElementById('importSummary');
+    const capacityEl = document.getElementById('importCapacityInfo');
+    const commitBtn = document.getElementById('commitImportBtn');
+
+    if (!wrap || !body || !data) return;
+
+    body.innerHTML = (data.rows || []).map(row => {
+        const statusClass = row.status === 'error'
+            ? 'text-danger'
+            : row.status === 'skip'
+                ? 'text-muted'
+                : 'text-success';
+        const notes = [...(row.errors || []), ...(row.warnings || [])].join('; ') || '—';
+        return `
+            <tr>
+                <td>${row.row}</td>
+                <td>${escapeHtml(row.fullname || '')}</td>
+                <td>${escapeHtml(row.academic_number || '')}</td>
+                <td>${escapeHtml(row.personnel_rank || '—')}</td>
+                <td class="${statusClass} fw-semibold">${escapeHtml(row.status)}</td>
+                <td><small>${escapeHtml(notes)}</small></td>
+            </tr>
+        `;
+    }).join('');
+
+    wrap.style.display = 'block';
+
+    const summary = data.summary || {};
+    summaryEl.classList.remove('d-none');
+    summaryEl.innerHTML = `
+        <span class="me-3"><strong>${summary.total || 0}</strong> rows</span>
+        <span class="me-3 text-success"><strong>${summary.ready || 0}</strong> ready</span>
+        <span class="me-3 text-muted"><strong>${summary.skip || 0}</strong> skip</span>
+        <span class="text-danger"><strong>${summary.error || 0}</strong> errors</span>
+    `;
+
+    const capacity = data.capacity || {};
+    capacityEl.classList.remove('d-none');
+    if (capacity.exceeded) {
+        capacityEl.className = 'alert alert-danger py-2 small mb-3';
+        capacityEl.textContent = `Section capacity exceeded for ${capacity.section_name || 'section'}. Max ${capacity.capacity}, assigned ${capacity.assigned_count}, available ${capacity.available_slots}, import needs ${summary.new_assignments}.`;
+    } else {
+        capacityEl.className = 'alert alert-info py-2 small mb-3';
+        capacityEl.textContent = `${capacity.section_name || 'Section'}: capacity ${capacity.capacity}, assigned ${capacity.assigned_count}, available ${capacity.available_slots}, import needs ${summary.new_assignments}.`;
+    }
+
+    const canCommit = (summary.ready || 0) > 0 && !capacity.exceeded;
+    commitBtn.disabled = !canCommit;
+}
+
+function previewBulkImport() {
+    const sectionId = document.getElementById('importSectionSelect')?.value;
+    if (!sectionId) {
+        showAlert('Select a section first', 'error');
+        return;
+    }
+    if (parsedImportRows.length === 0) {
+        showAlert('Upload a roster file first', 'error');
+        return;
+    }
+
+    const previewBtn = document.getElementById('previewImportBtn');
+    previewBtn.disabled = true;
+    previewBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Previewing...';
+
+    axios.post(API_BASE, {
+        action: 'preview_bulk_examinees',
+        section_id: sectionId,
+        rows: parsedImportRows
+    })
+        .then(response => {
+            if (response.data.success) {
+                importPreviewData = response.data;
+                renderImportPreview(response.data);
+            } else {
+                showAlert(response.data.message || 'Preview failed', 'error');
+            }
+        })
+        .catch(error => {
+            showAlert(error.response?.data?.message || 'Preview failed', 'error');
+        })
+        .finally(() => {
+            previewBtn.disabled = false;
+            previewBtn.innerHTML = '<i class="bi bi-search me-1"></i>Preview';
+            updateImportActionState();
+        });
+}
+
+function commitBulkImport() {
+    const sectionId = document.getElementById('importSectionSelect')?.value;
+    if (!sectionId || parsedImportRows.length === 0) {
+        showAlert('Select a section and upload a file first', 'error');
+        return;
+    }
+
+    Swal.fire({
+        title: 'Import Examinees?',
+        html: 'Valid rows will create new accounts (default password) and assign them to the selected section.',
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Import',
+        cancelButtonText: 'Cancel'
+    }).then(result => {
+        if (!result.isConfirmed) return;
+
+        const commitBtn = document.getElementById('commitImportBtn');
+        commitBtn.disabled = true;
+        commitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Importing...';
+
+        axios.post(API_BASE, {
+            action: 'commit_bulk_examinees',
+            section_id: sectionId,
+            rows: parsedImportRows
+        })
+            .then(response => {
+                if (response.data.success) {
+                    showAlert(response.data.message || 'Import completed', 'success');
+                    if (bulkImportModal) {
+                        bulkImportModal.hide();
+                    }
+                    loadUsers();
+                } else {
+                    showAlert(response.data.message || 'Import failed', 'error');
+                }
+            })
+            .catch(error => {
+                showAlert(error.response?.data?.message || 'Import failed', 'error');
+            })
+            .finally(() => {
+                commitBtn.disabled = false;
+                commitBtn.innerHTML = '<i class="bi bi-upload me-2"></i>Import Examinees';
+            });
+    });
+}
+
+function downloadImportTemplate() {
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([
+        ['Fullname', 'Academic_Number', 'Rank', 'Email'],
+        ['Juan Dela Cruz', '', 'PAT', 'juan@example.com'],
+        ['Maria Santos', 'A010', 'PCPL', 'maria@example.com']
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Examinees');
+    XLSX.writeFile(wb, 'examinee_import_template.xlsx');
+}
+
+function openBulkImportModal() {
+    if (!bulkImportModal) {
+        bulkImportModal = new bootstrap.Modal(document.getElementById('bulkImportModal'));
+    }
+
+    resetImportModal();
+
+    axios.get(`${COURSES_API}?action=tree`)
+        .then(response => {
+            if (response.data.success) {
+                importCourseTree = response.data.data || [];
+                populateImportCourses();
+                bulkImportModal.show();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading courses:', error);
+            showAlert('Error loading courses', 'error');
+        });
 }
 
 // Dropdown toggle handler
@@ -716,35 +1264,49 @@ document.querySelectorAll('.submenu a[href]').forEach(link => {
     });
 });
 
-// Logout handler
-document.getElementById('logoutBtn').addEventListener('click', function(e) {
-    e.preventDefault();
-    Swal.fire({
-        title: 'Logout',
-        text: 'Are you sure you want to logout?',
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, logout',
-        cancelButtonText: 'No, stay',
-        confirmButtonColor: '#2563eb',
-        cancelButtonColor: '#6b7280'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            fetch('../../api/auth/logout.php', {
-                method: 'POST'
-            }).then(() => {
-                window.location.href = '../../login.php';
-            }).catch(() => {
-                window.location.href = '../../login.php';
-            });
-        }
-    });
-});
-
 // Initialize on page load
 loadRoles();
 loadPersonnelRanks();
 loadUsers();
+
+document.getElementById('openBulkImportModalBtn')?.addEventListener('click', openBulkImportModal);
+document.getElementById('downloadImportTemplateBtn')?.addEventListener('click', downloadImportTemplate);
+document.getElementById('previewImportBtn')?.addEventListener('click', previewBulkImport);
+document.getElementById('commitImportBtn')?.addEventListener('click', commitBulkImport);
+document.getElementById('importCourseSelect')?.addEventListener('change', function() {
+    populateImportBatches(this.value);
+    updateImportActionState();
+});
+document.getElementById('importBatchSelect')?.addEventListener('change', function() {
+    populateImportSections(this.value);
+    updateImportActionState();
+});
+document.getElementById('importSectionSelect')?.addEventListener('change', updateImportActionState);
+document.getElementById('importFile')?.addEventListener('change', function() {
+    resetImportPreview();
+    const file = this.files && this.files[0];
+    if (!file) {
+        parsedImportRows = [];
+        updateImportActionState();
+        return;
+    }
+
+    parseImportFile(file)
+        .then(rows => {
+            parsedImportRows = rows;
+            if (rows.length === 0) {
+                showAlert('No data rows found in file', 'error');
+            }
+            updateImportActionState();
+        })
+        .catch(error => {
+            console.error(error);
+            parsedImportRows = [];
+            showAlert('Unable to parse file. Use the template format.', 'error');
+            updateImportActionState();
+        });
+});
+document.getElementById('bulkImportModal')?.addEventListener('hidden.bs.modal', resetImportModal);
 
 // Real-time validation for fullname
 document.getElementById('fullname').addEventListener('input', function() {
@@ -760,34 +1322,6 @@ document.getElementById('fullname').addEventListener('input', function() {
         this.classList.remove('is-valid');
     } else if (value.length < 2 || value.length > 100) {
         this.setCustomValidity('Full name must be between 2 and 100 characters');
-        this.classList.add('is-invalid');
-        this.classList.remove('is-valid');
-    } else {
-        this.setCustomValidity('');
-        this.classList.remove('is-invalid');
-        this.classList.add('is-valid');
-    }
-});
-
-// Real-time validation for username
-document.getElementById('username').addEventListener('input', function() {
-    const value = this.value;
-    const pattern = /^[a-zA-Z0-9_\-]+$/;
-    const hasLetter = /[a-zA-Z]/.test(value);
-    
-    if (value.length === 0) {
-        this.setCustomValidity('');
-        this.classList.remove('is-invalid', 'is-valid');
-    } else if (!pattern.test(value)) {
-        this.setCustomValidity('Username must contain only letters, numbers, underscores, and hyphens');
-        this.classList.add('is-invalid');
-        this.classList.remove('is-valid');
-    } else if (!hasLetter) {
-        this.setCustomValidity('Username must contain at least one letter');
-        this.classList.add('is-invalid');
-        this.classList.remove('is-valid');
-    } else if (value.length < 3 || value.length > 50) {
-        this.setCustomValidity('Username must be between 3 and 50 characters');
         this.classList.add('is-invalid');
         this.classList.remove('is-valid');
     } else {
@@ -816,23 +1350,7 @@ document.getElementById('email').addEventListener('input', function() {
     }
 });
 
-// Real-time validation for password
-document.getElementById('password').addEventListener('input', function() {
-    const value = this.value;
-    
-    if (value.length === 0) {
-        this.setCustomValidity('');
-        this.classList.remove('is-invalid', 'is-valid');
-    } else if (value !== '********' && value.length < 6) {
-        this.setCustomValidity('Password must be at least 6 characters');
-        this.classList.add('is-invalid');
-        this.classList.remove('is-valid');
-    } else {
-        this.setCustomValidity('');
-        this.classList.remove('is-invalid');
-        if (value !== '********') this.classList.add('is-valid');
-    }
-});
+initAdminPasswordPolicyValidation();
 
 // Filter controls
 document.getElementById('filterRole').addEventListener('change', function () {

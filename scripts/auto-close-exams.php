@@ -1,36 +1,36 @@
 <?php
 /**
- * Auto-close exams that are past their deadline
- * Run this script periodically (e.g., every 5 minutes via cron)
- * 
- * Cron example: */5 * * * * php /path/to/RTC10/scripts/auto-close-exams.php
+ * Auto-close exams past deadline and finalize unsubmitted / in-progress attempts.
+ * Run periodically (e.g., every 5 minutes via cron).
  */
 
 require_once __DIR__ . '/../api/config/connection-pdo.php';
+require_once __DIR__ . '/../api/includes/exam-deadline-finalize-utils.php';
 
 try {
-    // Find exams that should be closed
-    // Status = Published AND Deadline + 30 minutes has passed
-    $sql = "
-        UPDATE tbl_exam 
-        SET Status = 'Closed' 
-        WHERE Status = 'Published' 
-        AND Deadline IS NOT NULL 
-        AND DATE_ADD(Deadline, INTERVAL 30 MINUTE) < NOW()
-    ";
-    
-    $result = $pdo->exec($sql);
-    
+    $totals = finalizeAllOverdueExams($pdo);
+
     $timestamp = date('Y-m-d H:i:s');
-    echo "[$timestamp] Auto-closed $result exam(s)\n";
-    
-    // Log the closed exams
-    if ($result > 0) {
-        error_log("Auto-closed $result exam(s) at $timestamp");
+    echo "[{$timestamp}] Auto-closed {$totals['exams_closed']} exam(s); "
+        . "auto-submitted {$totals['auto_submitted']} session(s); "
+        . "marked {$totals['missed_failed']} missed deadline failure(s)";
+    if ($totals['errors'] > 0) {
+        echo "; {$totals['errors']} error(s)";
     }
-    
+    echo "\n";
+
+    if ($totals['exams_closed'] > 0 || $totals['auto_submitted'] > 0 || $totals['missed_failed'] > 0) {
+        error_log(sprintf(
+            'Auto-close/finalize at %s: closed=%d submitted=%d missed=%d errors=%d',
+            $timestamp,
+            $totals['exams_closed'],
+            $totals['auto_submitted'],
+            $totals['missed_failed'],
+            $totals['errors']
+        ));
+    }
 } catch (PDOException $e) {
     $timestamp = date('Y-m-d H:i:s');
-    echo "[$timestamp] Error: " . $e->getMessage() . "\n";
-    error_log("Auto-close exams error: " . $e->getMessage());
+    echo "[{$timestamp}] Error: " . $e->getMessage() . "\n";
+    error_log('Auto-close exams error: ' . $e->getMessage());
 }

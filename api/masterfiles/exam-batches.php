@@ -10,6 +10,9 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/audit-log-utils.php';
+require_once __DIR__ . '/../includes/batch-enrollment-utils.php';
+require_once __DIR__ . '/../includes/exam-participant-utils.php';
+require_once __DIR__ . '/../includes/validation-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -24,6 +27,34 @@ try {
     if ($request_method === 'POST' && $action === 'assign') {
         $exam_id = $input['exam_id'] ?? '';
         $batch_ids = $input['batch_ids'] ?? [];
+        $section_ids = $input['section_ids'] ?? [];
+
+        if (!is_array($batch_ids)) {
+            $batch_ids = [];
+        }
+        if (!is_array($section_ids)) {
+            $section_ids = [];
+        }
+
+        if (!empty($section_ids)) {
+            $duplicateSectionError = detectDuplicateSectionIds($section_ids);
+            if ($duplicateSectionError !== null) {
+                http_response_code(409);
+                echo json_encode(['success' => false, 'message' => $duplicateSectionError]);
+                exit;
+            }
+
+            foreach ($section_ids as $section_id) {
+                if (empty($section_id)) {
+                    continue;
+                }
+                $enrollmentBatchId = getEnrollmentBatchId($pdo, $section_id);
+                if ($enrollmentBatchId) {
+                    $batch_ids[] = $enrollmentBatchId;
+                }
+            }
+            $batch_ids = array_values(array_unique(array_map('intval', $batch_ids)));
+        }
 
         if (empty($exam_id)) {
             http_response_code(400);
@@ -56,7 +87,12 @@ try {
 
         $pdo->commit();
 
-        auditFromSession($pdo, 'EXAM', 'ASSIGN_EXAM_BATCH', count($batch_ids) . " batches assigned to exam {$exam_id}", 'SUCCESS', 'exam', (int)$exam_id);
+        if (examParticipantTableExists($pdo)) {
+            syncExamParticipantsFromSections($pdo, (int)$exam_id);
+        }
+
+        $examLabel = auditExamLabel($pdo, (int)$exam_id);
+        auditFromSession($pdo, 'EXAM', 'ASSIGN_EXAM_BATCH', count($batch_ids) . " batches assigned to exam {$examLabel}", 'SUCCESS', 'exam', (int)$exam_id);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Batches assigned successfully', 'count' => count($batch_ids)]);
@@ -73,24 +109,29 @@ try {
             exit;
         }
 
+        repairExamBatchAssignmentsFromParticipants($pdo, (int)$exam_id);
+
         // Check if tbl_batch has Course_ID (old schema) or Section_ID (new schema)
         $columns = $pdo->query("SHOW COLUMNS FROM tbl_batch")->fetchAll(PDO::FETCH_ASSOC);
         $columnNames = array_column($columns, 'Field');
         
         if (in_array('Section_ID', $columnNames)) {
-            // New schema with Section_ID
             $stmt = $pdo->prepare('
                 SELECT 
                     eb.Exam_Batch_ID,
                     eb.Batch_ID,
-                    b.Batch_Name,
-                    c.Course_Name
+                    COALESCE(pb.Batch_Name, b.Batch_Name) AS Batch_Name,
+                    COALESCE(s.Section_ID, b.Section_ID) AS Section_ID,
+                    COALESCE(s.Section_Name, b.Batch_Name) AS Section_Name,
+                    c.Course_Name,
+                    c.Course_ID
                 FROM tbl_exam_batch eb
                 INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
-                INNER JOIN tbl_academic_section s ON b.Section_ID = s.Section_ID
+                LEFT JOIN tbl_academic_section s ON b.Section_ID = s.Section_ID
+                LEFT JOIN tbl_batch pb ON s.Batch_ID = pb.Batch_ID
                 INNER JOIN tbl_course c ON b.Course_ID = c.Course_ID
                 WHERE eb.Exam_ID = ?
-                ORDER BY c.Course_Name, b.Batch_Name
+                ORDER BY c.Course_Name, Batch_Name, s.Section_Name
             ');
         } else {
             // Old schema with Course_ID

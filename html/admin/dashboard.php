@@ -71,6 +71,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <li><a href="../masterfiles/exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
                 <li><a href="../masterfiles/question-bank.php"><i class="bi bi-folder"></i>Question Bank</a></li>
                 <li><a href="../masterfiles/reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
+                <li><a href="cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
                 <li><a href="../masterfiles/archive.php"><i class="bi bi-archive"></i>Archive</a></li>
                 <li><a href="../masterfiles/audit-logs.php"><i class="bi bi-clock-history"></i>Audit Logs</a></li>
                 <li><a href="../masterfiles/settings.php"><i class="bi bi-gear"></i>System Settings</a></li>
@@ -88,7 +89,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
             <div class="stats-grid">
                 <div class="stat-card blue">
                     <div class="stat-header">
-                        <div class="stat-label">Total Users</div>
+                        <div class="stat-label">Active Users</div>
                         <div class="stat-icon icon-blue"><i class="bi bi-people-fill"></i></div>
                     </div>
                     <div class="stat-value" id="totalUsers">--</div>
@@ -108,25 +109,25 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     </div>
                 </div>
 
-                <div class="stat-card red">
+                <div class="stat-card purple">
                     <div class="stat-header">
-                        <div class="stat-label">System Alerts</div>
-                        <div class="stat-icon icon-red"><i class="bi bi-exclamation-circle-fill"></i></div>
+                        <div class="stat-label">Active Exams</div>
+                        <div class="stat-icon icon-purple"><i class="bi bi-pencil-square"></i></div>
                     </div>
-                    <div class="stat-value" id="systemAlerts">--</div>
+                    <div class="stat-value" id="activeExams">--</div>
                     <div class="stat-footer">
-                        <span id="alertsStatus">--</span>
+                        <span id="activeExamsLabel">Published exams</span>
                     </div>
                 </div>
 
-                <div class="stat-card purple">
+                <div class="stat-card red">
                     <div class="stat-header">
-                        <div class="stat-label">System Uptime</div>
-                        <div class="stat-icon icon-purple"><i class="bi bi-check-circle-fill"></i></div>
+                        <div class="stat-label">Open Incidents</div>
+                        <div class="stat-icon icon-red"><i class="bi bi-exclamation-triangle"></i></div>
                     </div>
-                    <div class="stat-value" id="systemUptime">--</div>
+                    <div class="stat-value" id="openIncidents">--</div>
                     <div class="stat-footer">
-                        <span id="uptimeLabel">--</span>
+                        <a href="cheating-incidents.php" class="text-decoration-none">Review cheating incidents</a>
                     </div>
                 </div>
             </div>
@@ -196,40 +197,16 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
+    <script src="../../assets/js/logout-handler.js?v=1"></script>
     <script src="../../assets/js/auto-logout.js"></script>
     <script>
-        // Logout handler
-        document.getElementById('logoutBtn').addEventListener('click', function(e) {
-            e.preventDefault();
-            Swal.fire({
-                title: 'Logout',
-                text: 'Are you sure you want to logout?',
-                icon: 'question',
-                showCancelButton: true,
-                confirmButtonText: 'Yes, logout',
-                cancelButtonText: 'No, stay',
-                confirmButtonColor: '#2563eb',
-                cancelButtonColor: '#6b7280'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    fetch('../../api/auth/logout.php', {
-                        method: 'POST'
-                    }).then(() => {
-                        window.location.href = '../../login.php';
-                    }).catch(() => {
-                        window.location.href = '../../login.php';
-                    });
-                }
-            });
-        });
-
         // Load dashboard statistics
         axios.get('../../api/admin/stats.php', { withCredentials: true })
             .then(function (response) {
                 if (response.data.success && response.data.stats) {
                     const stats = response.data.stats;
                     
-                    // Update Total Users
+                    // Update Active Users
                     const totalUsersEl = document.getElementById('totalUsers');
                     if (totalUsersEl) {
                         totalUsersEl.textContent = stats.total_users || 0;
@@ -239,6 +216,17 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     const activeCoursesEl = document.getElementById('activeCourses');
                     if (activeCoursesEl) {
                         activeCoursesEl.textContent = stats.total_courses || 0;
+                    }
+
+                    // Update Active Exams
+                    const activeExamsEl = document.getElementById('activeExams');
+                    if (activeExamsEl) {
+                        activeExamsEl.textContent = stats.active_exams ?? 0;
+                    }
+
+                    const openIncidentsEl = document.getElementById('openIncidents');
+                    if (openIncidentsEl) {
+                        openIncidentsEl.textContent = stats.open_incidents ?? 0;
                     }
                     
                     // Update users by role if elements exist
@@ -268,6 +256,14 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 const activeCoursesEl = document.getElementById('activeCourses');
                 if (activeCoursesEl) {
                     activeCoursesEl.textContent = '0';
+                }
+                const activeExamsEl = document.getElementById('activeExams');
+                if (activeExamsEl) {
+                    activeExamsEl.textContent = '0';
+                }
+                const openIncidentsEl = document.getElementById('openIncidents');
+                if (openIncidentsEl) {
+                    openIncidentsEl.textContent = '0';
                 }
             });
 

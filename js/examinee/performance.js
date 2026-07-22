@@ -12,7 +12,6 @@ let overviewData = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     subjectDetailModal = new bootstrap.Modal(document.getElementById('subjectDetailModal'));
-    document.getElementById('logoutBtn').addEventListener('click', handleLogout);
     document.getElementById('dateRangeFilter').addEventListener('change', (e) => {
         currentDateRange = e.target.value;
         loadPerformance();
@@ -54,16 +53,15 @@ function renderOverview(data) {
     }
 
     renderStatusBanner(summary, data.weak_subjects || []);
-    renderSummaryStats(summary, data.best_subject, data.weakest_subject);
-    renderTrendChart(data.trend || []);
-    renderRecommendations(data.recommendations || []);
     renderSubjectHighlights('strongSubjectsList', data.strong_subjects || [], 'No strong subjects identified yet.');
     renderSubjectHighlights('weakSubjectsList', data.weak_subjects || [], 'No weak subjects — great job!');
-    renderSubjectsTable(data.subjects || []);
+    renderTrendChart(data.trend || []);
+    renderRecommendations(data.recommendations || []);
 }
 
 function renderStatusBanner(summary, weakSubjects) {
     const status = summary.status || 'No data';
+    const examsTaken = summary.exams_taken || 0;
     const classMap = {
         'On track': 'on-track',
         'Needs review': 'needs-review',
@@ -79,14 +77,14 @@ function renderStatusBanner(summary, weakSubjects) {
 
     let message = '';
     if (status === 'On track') {
-        message = 'You are on track overall. Keep maintaining your study habits.';
+        message = `You are on track overall across ${examsTaken} completed exam${examsTaken !== 1 ? 's' : ''}. Keep maintaining your study habits.`;
     } else if (status === 'Needs review') {
         const count = weakSubjects.length;
         message = count > 0
-            ? `Your overall performance needs review. ${count} subject${count > 1 ? 's' : ''} need${count === 1 ? 's' : ''} attention.`
-            : 'Your overall performance needs review. Focus on improving your pass rate.';
+            ? `${examsTaken} exam${examsTaken !== 1 ? 's' : ''} completed. ${count} subject${count > 1 ? 's' : ''} need${count === 1 ? 's' : ''} attention.`
+            : `${examsTaken} exam${examsTaken !== 1 ? 's' : ''} completed. Focus on improving your pass rate.`;
     } else if (status === 'At risk') {
-        message = 'Your performance is at risk. Prioritize study in your weakest subjects immediately.';
+        message = `${examsTaken} exam${examsTaken !== 1 ? 's' : ''} completed. Prioritize study in your weakest subjects immediately.`;
     } else {
         message = 'Complete exams to receive a performance status.';
     }
@@ -97,43 +95,6 @@ function renderStatusBanner(summary, weakSubjects) {
         <div>
             <strong>${escapeHtml(status)}</strong>
             <div>${escapeHtml(message)}</div>
-        </div>
-    `;
-}
-
-function renderSummaryStats(summary, bestSubject, weakestSubject) {
-    document.getElementById('summaryStats').innerHTML = `
-        <div class="stat-card blue">
-            <div class="stat-header">
-                <div class="stat-label">Average Score</div>
-                <div class="stat-icon icon-blue"><i class="bi bi-percent"></i></div>
-            </div>
-            <div class="stat-value">${summary.avg_percentage > 0 ? summary.avg_percentage + '%' : '—'}</div>
-            <div class="stat-footer"><span>${summary.exams_taken || 0} exam${summary.exams_taken !== 1 ? 's' : ''} taken</span></div>
-        </div>
-        <div class="stat-card green">
-            <div class="stat-header">
-                <div class="stat-label">Pass Rate</div>
-                <div class="stat-icon icon-green"><i class="bi bi-check-circle"></i></div>
-            </div>
-            <div class="stat-value">${summary.pass_rate ?? 0}%</div>
-            <div class="stat-footer"><span>${summary.passed_count || 0} passed / ${summary.failed_count || 0} failed</span></div>
-        </div>
-        <div class="stat-card purple">
-            <div class="stat-header">
-                <div class="stat-label">Best Subject</div>
-                <div class="stat-icon" style="background:#f3e8ff;color:#9333ea;"><i class="bi bi-trophy"></i></div>
-            </div>
-            <div class="stat-value" style="font-size:1.1rem;">${bestSubject ? escapeHtml(bestSubject.Subject_Name) : '—'}</div>
-            <div class="stat-footer"><span>${bestSubject ? bestSubject.avg_percentage + '% avg' : 'No data'}</span></div>
-        </div>
-        <div class="stat-card red">
-            <div class="stat-header">
-                <div class="stat-label">Weakest Subject</div>
-                <div class="stat-icon icon-red"><i class="bi bi-arrow-down-circle"></i></div>
-            </div>
-            <div class="stat-value" style="font-size:1.1rem;">${weakestSubject ? escapeHtml(weakestSubject.Subject_Name) : '—'}</div>
-            <div class="stat-footer"><span>${weakestSubject ? weakestSubject.avg_percentage + '% avg' : 'No data'}</span></div>
         </div>
     `;
 }
@@ -155,8 +116,8 @@ function renderTrendChart(trend) {
     canvas.classList.remove('d-none');
     emptyMsg.classList.add('d-none');
 
-    const labels = trend.map(t => formatDate(t.date));
-    const scores = trend.map(t => parseFloat(t.avg_score));
+    const labels = trend.map((t, index) => `Exam ${index + 1}`);
+    const scores = trend.map(t => parseFloat(t.score));
 
     if (trendChart) {
         trendChart.destroy();
@@ -167,12 +128,12 @@ function renderTrendChart(trend) {
         data: {
             labels,
             datasets: [{
-                label: 'Average Score (%)',
+                label: 'Score (%)',
                 data: scores,
                 borderColor: '#2563eb',
                 backgroundColor: 'rgba(37, 99, 235, 0.1)',
                 fill: true,
-                tension: 0.3,
+                tension: 0,
                 pointRadius: 4,
                 pointHoverRadius: 6
             }]
@@ -191,7 +152,22 @@ function renderTrendChart(trend) {
                 legend: { display: false },
                 tooltip: {
                     callbacks: {
-                        label: (ctx) => ctx.parsed.y + '%'
+                        title: (items) => {
+                            const point = trend[items[0].dataIndex];
+                            return point?.exam_title || items[0].label;
+                        },
+                        label: (ctx) => {
+                            const point = trend[ctx.dataIndex];
+                            const scoreLabel = `${ctx.parsed.y}%`;
+                            if (point?.subject_name) {
+                                return `${scoreLabel} · ${point.subject_name}`;
+                            }
+                            return scoreLabel;
+                        },
+                        afterLabel: (ctx) => {
+                            const point = trend[ctx.dataIndex];
+                            return point?.date ? formatDateTime(point.date) : '';
+                        }
                     }
                 }
             }
@@ -210,7 +186,7 @@ function renderRecommendations(recommendations) {
     container.innerHTML = recommendations.map(rec => {
         const priorityClass = rec.priority >= 80 ? 'priority-high' : rec.priority >= 40 ? 'priority-medium' : 'priority-low';
         const actionBtn = rec.action === 'take_exam'
-            ? `<a href="../examinee/dashboard.php#available-exams" class="btn btn-link btn-sm p-0 rec-action">Take exam →</a>`
+            ? `<a href="../examinee/dashboard.php" class="btn btn-link btn-sm p-0 rec-action">View exams →</a>`
             : `<button type="button" class="btn btn-link btn-sm p-0 rec-action" onclick="openSubjectDetail(${rec.subject_id})">View subject →</button>`;
 
         return `
@@ -244,27 +220,6 @@ function renderSubjectHighlights(containerId, subjects, emptyText) {
     `).join('');
 }
 
-function renderSubjectsTable(subjects) {
-    const tbody = document.getElementById('subjectsTableBody');
-
-    if (!subjects.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">No subject data available</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = subjects.map(s => `
-        <tr onclick="openSubjectDetail(${s.Subject_ID})">
-            <td><strong>${escapeHtml(s.Subject_Name)}</strong></td>
-            <td>${escapeHtml(s.Course_Name || '—')}</td>
-            <td>${s.exams_taken}</td>
-            <td>${s.avg_percentage}%</td>
-            <td>${s.pass_rate}%</td>
-            <td>${trendIcon(s.trend)}</td>
-            <td>${statusBadge(s.status)}</td>
-        </tr>
-    `).join('');
-}
-
 async function openSubjectDetail(subjectId) {
     const modalBody = document.getElementById('subjectDetailBody');
     modalBody.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary" role="status"></div></div>';
@@ -288,7 +243,6 @@ function renderSubjectDetail(data) {
     const summary = data.summary;
     const attempts = data.attempts || [];
     const suggestions = data.suggestions || [];
-    const accuracy = data.question_accuracy;
 
     document.getElementById('subjectDetailModalLabel').textContent = subject.Subject_Name || 'Subject Performance';
 
@@ -310,16 +264,6 @@ function renderSubjectDetail(data) {
         `;
     } else {
         summaryHtml = '<div class="alert alert-info">No completed exams in this subject for the selected period.</div>';
-    }
-
-    let accuracyHtml = '';
-    if (accuracy) {
-        accuracyHtml = `
-            <div class="alert alert-light border mb-3">
-                <strong><i class="bi bi-patch-question me-1"></i>Question Accuracy</strong><br>
-                ${accuracy.correct_count} correct out of ${accuracy.total_answered} questions (${accuracy.accuracy}%)
-            </div>
-        `;
     }
 
     let chartHtml = '';
@@ -363,7 +307,7 @@ function renderSubjectDetail(data) {
         `;
     }
 
-    document.getElementById('subjectDetailBody').innerHTML = summaryHtml + accuracyHtml + chartHtml + attemptsHtml + suggestionsHtml;
+    document.getElementById('subjectDetailBody').innerHTML = summaryHtml + chartHtml + attemptsHtml + suggestionsHtml;
 
     if ((data.trend || []).length >= 2) {
         renderSubjectTrendChart(data.trend);
@@ -381,14 +325,14 @@ function renderSubjectTrendChart(trend) {
     subjectTrendChart = new Chart(canvas, {
         type: 'line',
         data: {
-            labels: trend.map(t => formatDate(t.date)),
+            labels: trend.map((t, index) => `Exam ${index + 1}`),
             datasets: [{
                 label: 'Score (%)',
                 data: trend.map(t => parseFloat(t.score)),
                 borderColor: '#10b981',
                 backgroundColor: 'rgba(16, 185, 129, 0.1)',
                 fill: true,
-                tension: 0.3,
+                tension: 0,
                 pointRadius: 5
             }]
         },
@@ -400,7 +344,19 @@ function renderSubjectTrendChart(trend) {
             },
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: (ctx) => ctx.parsed.y + '%' } }
+                tooltip: {
+                    callbacks: {
+                        title: (items) => {
+                            const point = trend[items[0].dataIndex];
+                            return point?.exam_title || items[0].label;
+                        },
+                        label: (ctx) => `${ctx.parsed.y}%`,
+                        afterLabel: (ctx) => {
+                            const point = trend[ctx.dataIndex];
+                            return point?.date ? formatDateTime(point.date) : '';
+                        }
+                    }
+                }
             }
         }
     });
@@ -419,36 +375,10 @@ function statusBadge(status) {
     return `<span class="perf-badge ${cls}">${escapeHtml(status || 'Unknown')}</span>`;
 }
 
-function trendIcon(trend) {
-    if (trend === 'improving') return '<span class="trend-icon up"><i class="bi bi-arrow-up-circle-fill"></i> Up</span>';
-    if (trend === 'declining') return '<span class="trend-icon down"><i class="bi bi-arrow-down-circle-fill"></i> Down</span>';
-    return '<span class="trend-icon stable"><i class="bi bi-dash-circle"></i> Stable</span>';
-}
-
 function trendLabel(trend) {
     if (trend === 'improving') return '↑ Up';
     if (trend === 'declining') return '↓ Down';
     return '— Stable';
-}
-
-function handleLogout(e) {
-    e.preventDefault();
-    Swal.fire({
-        title: 'Logout',
-        text: 'Are you sure you want to logout?',
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, logout',
-        cancelButtonText: 'No, stay',
-        confirmButtonColor: '#2563eb',
-        cancelButtonColor: '#6b7280'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            fetch('../../api/auth/logout.php', { method: 'POST' })
-                .then(() => { window.location.href = '../../login.php'; })
-                .catch(() => { window.location.href = '../../login.php'; });
-        }
-    });
 }
 
 function showFatalError(message) {
@@ -457,7 +387,7 @@ function showFatalError(message) {
         title: 'Error',
         text: message,
         icon: 'error',
-        confirmButtonText: 'Go to Dashboard'
+        confirmButtonText: 'Go to Exams'
     }).then(() => {
         window.location.href = '../examinee/dashboard.php';
     });

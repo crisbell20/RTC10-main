@@ -137,6 +137,26 @@ body {
     font-size: 1.1rem;
 }
 
+.sidebar-menu .menu-label {
+    display: block;
+    padding: 12px 20px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 20px;
+    margin-bottom: 8px;
+    cursor: default;
+    pointer-events: none;
+}
+
+.sidebar-menu .menu-label i {
+    margin-right: 6px;
+    font-size: 0.8rem;
+    opacity: 0.6;
+}
+
 /* Dropdown Menu Styles */
 .dropdown-menu-item {
     position: relative;

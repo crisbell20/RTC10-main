@@ -2,7 +2,7 @@
 session_start();
 
 if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Admin', 'CCMD'])) {
-    header('Location: ../../html/auth/login.html');
+    header('Location: ../../login.php');
     exit;
 }
 
@@ -44,6 +44,7 @@ $isAdmin = $userRole === 'Admin';
                 <li><a href="exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
                 <li><a href="question-bank.php"><i class="bi bi-folder"></i>Question Bank</a></li>
                 <li><a href="reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
+                <li><a href="../admin/cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
                 <li><a href="archive.php"><i class="bi bi-archive"></i>Archive</a></li>
                 <li><a href="audit-logs.php" class="active"><i class="bi bi-clock-history"></i>Audit Logs</a></li>
                 <li><a href="settings.php"><i class="bi bi-gear"></i>System Settings</a></li>
@@ -55,11 +56,11 @@ $isAdmin = $userRole === 'Admin';
                 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <div>
                         <h2>Audit Logs</h2>
-                        <p class="text-muted mb-0 small">System activity and accountability trail (append-only)</p>
+                        <p class="text-muted small mb-0">Entries are kept for <strong>2 years</strong>, then permanently removed automatically.</p>
                     </div>
                     <div class="d-flex gap-2">
-                        <button class="btn btn-outline-primary btn-sm" id="exportAuditBtn">
-                            <i class="bi bi-download me-1"></i>Export CSV
+                        <button class="btn btn-add-user" id="exportAuditBtn">
+                            <i class="bi bi-download me-2"></i>Export CSV
                         </button>
                         <?php if ($isAdmin): ?>
                         <button class="btn btn-outline-danger btn-sm" id="purgeAuditBtn">
@@ -73,12 +74,15 @@ $isAdmin = $userRole === 'Admin';
             <div class="filter-card audit-filter-card">
                 <div class="row g-3 align-items-end">
                     <div class="col-md-2">
-                        <label class="form-label small" for="dateFrom">From</label>
-                        <input type="date" id="dateFrom" class="form-control form-control-sm">
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small" for="dateTo">To</label>
-                        <input type="date" id="dateTo" class="form-control form-control-sm">
+                        <label class="form-label small" for="filterDateRange">Date range</label>
+                        <select id="filterDateRange" class="form-select form-select-sm">
+                            <option value="7">Last 7 days</option>
+                            <option value="30" selected>Last 30 days</option>
+                            <option value="90">Last 90 days</option>
+                            <option value="365">Last year</option>
+                            <option value="730">Last 2 years</option>
+                            <option value="all">All time</option>
+                        </select>
                     </div>
                     <div class="col-md-2">
                         <label class="form-label small" for="filterModule">Module</label>
@@ -100,7 +104,7 @@ $isAdmin = $userRole === 'Admin';
                             <option value="FAILED">Failed</option>
                         </select>
                     </div>
-                    <div class="col-md-2">
+                    <div class="col-md-4">
                         <label class="form-label small" for="searchAudit">Search</label>
                         <input type="search" id="searchAudit" class="form-control form-control-sm" placeholder="User, action, details...">
                     </div>
@@ -167,7 +171,8 @@ $isAdmin = $userRole === 'Admin';
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
+    <script src="../../assets/js/logout-handler.js?v=1"></script>
     <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../js/masterfiles/audit-logs.js?v=2"></script>
+    <script src="../../js/masterfiles/audit-logs.js?v=5"></script>
 </body>
 </html>

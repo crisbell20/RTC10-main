@@ -8,7 +8,7 @@ require_once __DIR__ . '/../api/config/connection-pdo.php';
 echo "Checking users in database...\n\n";
 
 // Check if users exist
-$stmt = $pdo->query("SELECT User_ID, Email, Username, Fullname FROM tbl_user");
+$stmt = $pdo->query("SELECT User_ID, Email, Fullname FROM tbl_user");
 $users = $stmt->fetchAll();
 
 if (count($users) == 0) {
@@ -18,10 +18,10 @@ if (count($users) == 0) {
     $passwordHash = password_hash('password123', PASSWORD_DEFAULT);
     
     // Insert default users
-    $sql = "INSERT INTO `tbl_user` (`User_ID`, `Role_ID`, `Fullname`, `Email`, `Username`, `Password_Hash`, `Status`) VALUES
-    (1, 1, 'Administrator', 'admin@rtc.com', 'admin', ?, 'Active'),
-    (2, 2, 'CCMD Officer', 'ccmd@rtc.com', 'ccmd', ?, 'Active'),
-    (3, 3, 'Examinee User', 'examinee@rtc.com', 'examinee', ?, 'Active')";
+    $sql = "INSERT INTO `tbl_user` (`User_ID`, `Role_ID`, `Fullname`, `Email`, `Password_Hash`, `Status`) VALUES
+    (1, 1, 'Administrator', 'admin@rtc.com', ?, 'Active'),
+    (2, 2, 'CCMD Officer', 'ccmd@rtc.com', ?, 'Active'),
+    (3, 3, 'Examinee User', 'examinee@rtc.com', ?, 'Active')";
     
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$passwordHash, $passwordHash, $passwordHash]);

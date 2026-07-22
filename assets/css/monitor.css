@@ -1,16 +1,21 @@
 /* CCMD Live Monitor */
 
-.monitor-page-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    flex-wrap: wrap;
-    gap: 1rem;
+.filter-card {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
     margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.monitor-controls {
-    min-width: 280px;
+.monitor-filter-card .form-select {
+    min-width: 0;
+    width: 100%;
+}
+
+.monitor-page-filters .form-select,
+.monitor-page-filters .form-control {
+    min-width: 180px;
 }
 
 .monitor-table .progress {
@@ -59,11 +64,9 @@
 }
 
 @media (max-width: 768px) {
-    .monitor-page-header {
-        flex-direction: column;
-    }
-
-    .monitor-controls {
+    .monitor-page-filters .form-select,
+    .monitor-page-filters .form-control {
+        min-width: 0;
         width: 100%;
     }
 }

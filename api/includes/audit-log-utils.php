@@ -1,8 +1,12 @@
 <?php
 /**
  * Centralized audit logging for PNP RTC X.
- * Append-only: never update or delete via application except retention purge (Admin).
+ * Append-only: never update or delete via application except retention purge (Admin/cron).
  */
+
+const AUDIT_LOG_RETENTION_DAYS = 730; // 2 years — aligned with archive retention
+const AUDIT_LOG_RETENTION_DAYS_MIN = 30;
+const AUDIT_LOG_RETENTION_DAYS_MAX = 3650;
 
 function getClientIpAddress(): string
 {
@@ -61,6 +65,75 @@ function auditLogExtendedColumnsExist(PDO $pdo): bool
     }
 
     return $exists;
+}
+
+function auditLookupScalar(PDO $pdo, string $sql, array $params, string $fallback = ''): string
+{
+    try {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $value = $stmt->fetchColumn();
+        if ($value !== false && $value !== null && trim((string)$value) !== '') {
+            return trim((string)$value);
+        }
+    } catch (Exception $e) {
+        // Fall through to fallback
+    }
+
+    return $fallback;
+}
+
+function auditUserLabel(PDO $pdo, int $userId): string
+{
+    $fullname = auditLookupScalar($pdo, 'SELECT Fullname FROM tbl_user WHERE User_ID = ?', [$userId], '');
+    return $fullname !== '' ? $fullname : "User #{$userId}";
+}
+
+function auditBatchLabel(PDO $pdo, int $batchId): string
+{
+    $name = auditLookupScalar($pdo, 'SELECT Batch_Name FROM tbl_batch WHERE Batch_ID = ?', [$batchId], '');
+    return $name !== '' ? $name : "Batch #{$batchId}";
+}
+
+function auditExamLabel(PDO $pdo, int $examId): string
+{
+    $title = auditLookupScalar($pdo, 'SELECT Title FROM tbl_exam WHERE Exam_ID = ?', [$examId], '');
+    return $title !== '' ? $title : "Exam #{$examId}";
+}
+
+function auditSubjectLabel(PDO $pdo, int $subjectId): string
+{
+    $name = auditLookupScalar($pdo, 'SELECT Subject_Name FROM tbl_subject WHERE Subject_ID = ?', [$subjectId], '');
+    return $name !== '' ? $name : "Subject #{$subjectId}";
+}
+
+function auditCourseLabel(PDO $pdo, int $courseId): string
+{
+    $name = auditLookupScalar($pdo, 'SELECT Course_Name FROM tbl_course WHERE Course_ID = ?', [$courseId], '');
+    return $name !== '' ? $name : "Course #{$courseId}";
+}
+
+function auditQuestionPreview(PDO $pdo, int $questionId, int $maxLen = 60): string
+{
+    $text = auditLookupScalar($pdo, 'SELECT Question_Text FROM tbl_question_bank WHERE Question_ID = ?', [$questionId], '');
+    if ($text === '') {
+        return "Question #{$questionId}";
+    }
+
+    if (strlen($text) > $maxLen) {
+        return substr($text, 0, $maxLen - 3) . '...';
+    }
+
+    return $text;
+}
+
+function auditSessionUsername(): string
+{
+    if (!empty($_SESSION['user_name'])) {
+        return trim((string)$_SESSION['user_name']);
+    }
+
+    return '';
 }
 
 /**
@@ -219,14 +292,33 @@ function getAuditActionOptions(): array
 {
     return [
         'LOGIN', 'LOGIN_FAILED', 'LOGOUT', 'PASSWORD_CHANGE',
-        'CREATE_USER', 'UPDATE_USER', 'DELETE_USER', 'RESET_PASSWORD',
+        'CREATE_USER', 'UPDATE_USER', 'DELETE_USER', 'ARCHIVE_USER', 'RESTORE_USER', 'RESET_PASSWORD',
         'CREATE_EXAM', 'UPDATE_EXAM', 'DELETE_EXAM', 'ARCHIVE_EXAM', 'RESTORE_EXAM', 'CLOSE_EXAM',
         'RESET_EXAM_CODE', 'TOGGLE_RESPONSE_REVIEW', 'VIEW_EXAM_RESPONSE', 'ASSIGN_EXAM_QUESTIONS', 'ASSIGN_EXAM_BATCH',
-        'CREATE_QUESTION', 'UPDATE_QUESTION', 'DELETE_QUESTION', 'IMPORT_QUESTIONS',
-        'CREATE_COURSE', 'UPDATE_COURSE', 'DELETE_COURSE',
-        'CREATE_SUBJECT', 'UPDATE_SUBJECT', 'DELETE_SUBJECT',
+        'CREATE_QUESTION', 'UPDATE_QUESTION', 'DELETE_QUESTION', 'ARCHIVE_QUESTION', 'RESTORE_QUESTION', 'IMPORT_QUESTIONS',
+        'CREATE_COURSE', 'UPDATE_COURSE', 'DELETE_COURSE', 'ARCHIVE_COURSE', 'RESTORE_COURSE',
+        'CREATE_MODULE', 'UPDATE_MODULE', 'DELETE_MODULE', 'ARCHIVE_MODULE', 'RESTORE_MODULE',
+        'CREATE_SUBJECT', 'UPDATE_SUBJECT', 'DELETE_SUBJECT', 'ARCHIVE_SUBJECT', 'RESTORE_SUBJECT',
+        'ARCHIVE_BATCH', 'RESTORE_BATCH', 'ARCHIVE_SECTION', 'RESTORE_SECTION',
         'ASSIGN_USER_BATCH', 'REMOVE_USER_BATCH',
         'EXPORT_REPORT', 'EXPORT_EXAM_RESPONSES', 'EXPORT_AUDIT_LOGS',
-        'PURGE_AUDIT_LOGS',
+        'PURGE_AUDIT_LOGS', 'PURGE_ARCHIVED_EXAMS', 'PURGE_ARCHIVED_RECORDS',
     ];
+}
+
+/**
+ * Permanently delete audit log entries older than the retention period.
+ */
+function purgeAuditLogsOlderThan(PDO $pdo, int $retentionDays = AUDIT_LOG_RETENTION_DAYS): int
+{
+    if (!auditLogTableExists($pdo)) {
+        return 0;
+    }
+
+    $days = max(AUDIT_LOG_RETENTION_DAYS_MIN, min(AUDIT_LOG_RETENTION_DAYS_MAX, $retentionDays));
+
+    $stmt = $pdo->prepare('DELETE FROM tbl_audit_log WHERE Timestamp < DATE_SUB(NOW(), INTERVAL ? DAY)');
+    $stmt->execute([$days]);
+
+    return (int)$stmt->rowCount();
 }

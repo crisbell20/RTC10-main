@@ -1,0 +1,173 @@
+/* Google Forms–style exam question builder */
+
+.exam-question-canvas {
+    min-height: 200px;
+    max-height: 55vh;
+    overflow-y: auto;
+    padding: 0.25rem;
+}
+
+.exam-question-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.exam-question-card.dragging {
+    opacity: 0.45;
+}
+
+.exam-question-card.drag-over {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.exam-question-canvas-empty {
+    text-align: center;
+    padding: 2.5rem 1rem;
+    color: #6b7280;
+    border: 2px dashed #e5e7eb;
+    border-radius: 10px;
+    background: #fafafa;
+}
+
+.drag-handle {
+    cursor: grab;
+    color: #9ca3af;
+    padding: 0.15rem 0.25rem;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+.drag-handle[draggable="true"] {
+    cursor: grab;
+}
+
+.exam-canvas-drop-end {
+    border: 2px dashed #e5e7eb;
+    border-radius: 8px;
+    padding: 0.75rem;
+    text-align: center;
+    color: #9ca3af;
+    font-size: 0.85rem;
+    margin-top: 0.25rem;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.exam-canvas-drop-end.drag-over {
+    border-color: #2563eb;
+    background: #eff6ff;
+    color: #2563eb;
+}
+
+.exam-q-choice {
+    padding: 0.4rem 0.65rem;
+    margin: 0.25rem 0;
+    border-radius: 6px;
+    border: 1px solid #f3f4f6;
+    background: #f9fafb;
+    font-size: 0.9rem;
+}
+
+.exam-q-choice.correct {
+    border-color: #a7f3d0;
+    background: #ecfdf5;
+}
+
+.question-bank-panel {
+    max-height: 55vh;
+    overflow-y: auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 0.75rem;
+    background: #fafafa;
+}
+
+.question-bank-item {
+    background: #fff;
+    transition: border-color 0.15s ease;
+}
+
+.question-bank-item:hover {
+    border-color: #cbd5e1 !important;
+}
+
+.exam-question-card-draft {
+    border-color: #93c5fd;
+    background: #f8fafc;
+}
+
+.exam-question-card-editing {
+    border-color: #fbbf24;
+    background: #fffbeb;
+}
+
+.exam-q-actions {
+    display: inline-flex;
+    gap: 0.35rem;
+}
+
+.exam-q-actions .btn {
+    line-height: 1;
+    padding: 0.2rem 0.45rem;
+}
+
+.exam-q-bank-notice {
+    padding: 0.5rem 0.65rem;
+    border-radius: 6px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+}
+
+.exam-question-card-draft .draft-question-text,
+.exam-question-card-editing .draft-question-text {
+    resize: vertical;
+    min-height: 72px;
+}
+
+.draft-choice-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+}
+
+.draft-choice-row .form-check-input {
+    flex-shrink: 0;
+    margin-top: 0;
+}
+
+.draft-choice-row .draft-choice-label {
+    width: 1.5rem;
+    flex-shrink: 0;
+    font-weight: 600;
+    color: #6b7280;
+    text-align: center;
+}
+
+.draft-choice-row .form-control {
+    font-size: 0.9rem;
+}
+
+/* Exams list — keep ⋮ action menus visible when the list is short */
+.exams-list-card,
+.exams-list-card .section-body,
+#examsContainer,
+#examsContainer .course-card {
+    overflow: visible;
+}
+
+#examsContainer .dropdown-menu {
+    max-height: min(70vh, 420px);
+    overflow-y: auto;
+    z-index: 1050;
+}

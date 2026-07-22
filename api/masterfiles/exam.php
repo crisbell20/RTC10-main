@@ -10,6 +10,9 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/audit-log-utils.php';
+require_once __DIR__ . '/../includes/module-utils.php';
+require_once __DIR__ . '/../includes/question-publish-utils.php';
+require_once __DIR__ . '/../includes/archive-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
@@ -25,6 +28,9 @@ try {
         $points = $input['points'] ?? 1;
         $answers = $input['answers'] ?? [];
         $user_id = $_SESSION['user_id'];
+        $isPublished = array_key_exists('is_published', $input)
+            ? ((int)$input['is_published'] === 1 ? 1 : 0)
+            : 1;
 
         if (empty($subject_id) || empty($question_text)) {
             http_response_code(400);
@@ -61,9 +67,13 @@ try {
 
         $pdo->beginTransaction();
 
-        // Insert question
-        $stmt = $pdo->prepare('INSERT INTO tbl_question_bank (Subject_ID, User_ID, Question_Text, Question_Type, Added_Date) VALUES (?, ?, ?, ?, NOW())');
-        $stmt->execute([$subject_id, $user_id, $question_text, $question_type]);
+        if (questionPublishedColumnExists($pdo)) {
+            $stmt = $pdo->prepare('INSERT INTO tbl_question_bank (Subject_ID, User_ID, Question_Text, Question_Type, Is_Published, Added_Date) VALUES (?, ?, ?, ?, ?, NOW())');
+            $stmt->execute([$subject_id, $user_id, $question_text, $question_type, $isPublished]);
+        } else {
+            $stmt = $pdo->prepare('INSERT INTO tbl_question_bank (Subject_ID, User_ID, Question_Text, Question_Type, Added_Date) VALUES (?, ?, ?, ?, NOW())');
+            $stmt->execute([$subject_id, $user_id, $question_text, $question_type]);
+        }
         $question_id = $pdo->lastInsertId();
 
         // Insert answers
@@ -74,10 +84,19 @@ try {
 
         $pdo->commit();
 
-        auditFromSession($pdo, 'QUESTION', 'CREATE_QUESTION', "Question {$question_id} added to subject {$subject_id}", 'SUCCESS', 'question', (int)$question_id);
+        auditFromSession($pdo, 'QUESTION', 'CREATE_QUESTION', 'Question added to ' . auditSubjectLabel($pdo, (int)$subject_id) . ': ' . auditQuestionPreview($pdo, (int)$question_id), 'SUCCESS', 'question', (int)$question_id);
+
+        $message = $isPublished === 0
+            ? 'Exam draft question saved. It will be added to the question bank when the exam is published.'
+            : 'Question added successfully';
 
         http_response_code(201);
-        echo json_encode(['success' => true, 'message' => 'Question added successfully', 'question_id' => $question_id]);
+        echo json_encode([
+            'success' => true,
+            'message' => $message,
+            'question_id' => $question_id,
+            'is_published' => $isPublished
+        ]);
         exit;
     }
 
@@ -140,72 +159,85 @@ try {
 
         $pdo->commit();
 
-        auditFromSession($pdo, 'QUESTION', 'UPDATE_QUESTION', "Question {$question_id} updated", 'SUCCESS', 'question', (int)$question_id);
+        auditFromSession($pdo, 'QUESTION', 'UPDATE_QUESTION', 'Question updated: ' . auditQuestionPreview($pdo, (int)$question_id), 'SUCCESS', 'question', (int)$question_id);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Question updated successfully']);
         exit;
     }
 
-    // Delete question
-    if (($request_method === 'DELETE' || $request_method === 'POST') && $action === 'delete_question') {
-        $question_id = $_GET['question_id'] ?? ($input['question_id'] ?? '');
+    // Archive question
+    if ($request_method === 'POST' && $action === 'archive_question') {
+        $question_id = (int)($input['question_id'] ?? $_GET['question_id'] ?? 0);
 
-        if (empty($question_id)) {
+        if ($question_id <= 0) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Question ID is required']);
             exit;
         }
 
-        try {
-            $pdo->beginTransaction();
-
-            // Check if question is used in any exams
-            $stmt = $pdo->prepare('SELECT COUNT(*) as count FROM tbl_exam_question WHERE Question_ID = ?');
-            $stmt->execute([$question_id]);
-            $result = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($result['count'] > 0) {
-                $pdo->rollBack();
-                http_response_code(400);
-                echo json_encode(['success' => false, 'message' => 'Cannot delete question - it is assigned to one or more exams']);
-                exit;
-            }
-
-            // Delete choices first
-            $stmt = $pdo->prepare('DELETE FROM tbl_choice WHERE Question_ID = ?');
-            $stmt->execute([$question_id]);
-
-            // Delete question
-            $stmt = $pdo->prepare('DELETE FROM tbl_question_bank WHERE Question_ID = ?');
-            $stmt->execute([$question_id]);
-
-            $pdo->commit();
-
-            auditFromSession($pdo, 'QUESTION', 'DELETE_QUESTION', "Question {$question_id} deleted", 'SUCCESS', 'question', (int)$question_id);
-
-            http_response_code(200);
-            echo json_encode(['success' => true, 'message' => 'Question deleted successfully']);
-            exit;
-        } catch (Exception $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
-            http_response_code(500);
-            echo json_encode(['success' => false, 'message' => 'Error deleting question: ' . $e->getMessage()]);
+        if (!archiveRecord($pdo, 'tbl_question_bank', 'Question_ID', $question_id)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Unable to archive question. Run the archive migration first.']);
             exit;
         }
+
+        $questionPreview = auditQuestionPreview($pdo, $question_id);
+        auditFromSession($pdo, 'QUESTION', 'ARCHIVE_QUESTION', "Question archived: {$questionPreview}", 'SUCCESS', 'question', $question_id);
+
+        echo json_encode(['success' => true, 'message' => 'Question archived successfully']);
+        exit;
+    }
+
+    // Restore archived question
+    if ($request_method === 'POST' && $action === 'restore_question') {
+        $question_id = (int)($input['question_id'] ?? $_GET['question_id'] ?? 0);
+
+        if ($question_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Question ID is required']);
+            exit;
+        }
+
+        if (!restoreRecord($pdo, 'tbl_question_bank', 'Question_ID', $question_id)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => restoreFailureMessage($pdo, 'tbl_question_bank', 'Question_ID', $question_id, 'question')]);
+            exit;
+        }
+
+        $questionPreview = auditQuestionPreview($pdo, $question_id);
+        auditFromSession($pdo, 'QUESTION', 'RESTORE_QUESTION', "Question restored: {$questionPreview}", 'SUCCESS', 'question', $question_id);
+
+        echo json_encode(['success' => true, 'message' => 'Question restored successfully']);
+        exit;
+    }
+
+    // Delete question — disabled; use archive instead
+    if (($request_method === 'DELETE' || $request_method === 'POST') && $action === 'delete_question') {
+        archiveDeletionBlockedResponse();
     }
 
     // Import questions from Excel
     if ($request_method === 'POST' && $action === 'import_questions') {
         $questions = $input['questions'] ?? [];
+        $default_subject_id = $input['subject_id'] ?? null;
         $user_id = $_SESSION['user_id'];
 
         if (empty($questions)) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'No questions provided']);
             exit;
+        }
+
+        $default_subject_id = $default_subject_id ? (int)$default_subject_id : null;
+        if ($default_subject_id) {
+            $subjectCheck = $pdo->prepare('SELECT Subject_ID FROM tbl_subject WHERE Subject_ID = ? LIMIT 1');
+            $subjectCheck->execute([$default_subject_id]);
+            if (!$subjectCheck->fetch(PDO::FETCH_ASSOC)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'message' => 'Selected subject not found']);
+                exit;
+            }
         }
 
         $imported = 0;
@@ -217,61 +249,84 @@ try {
         try {
             foreach ($questions as $index => $q) {
                 $rowNum = $index + 2; // Excel row number (accounting for header)
-                
-                // Validate required fields
-                if (empty($q['Subject']) || empty($q['Question'])) {
+
+                if (empty($q['Question']) || !trim((string)$q['Question'])) {
                     $failed++;
-                    $errors[] = "Row $rowNum: Missing subject or question";
+                    $errors[] = "Row $rowNum: Question text is required";
                     continue;
                 }
 
-                // Find subject by name or code
-                $stmt = $pdo->prepare('SELECT Subject_ID FROM tbl_subject WHERE Subject_Name = ? OR Subject_Code = ? LIMIT 1');
-                $stmt->execute([$q['Subject'], $q['Subject']]);
-                $subject = $stmt->fetch(PDO::FETCH_ASSOC);
-
-                if (!$subject) {
+                $subject_id = null;
+                if ($default_subject_id) {
+                    $subject_id = $default_subject_id;
+                } elseif (!empty($q['Subject'])) {
+                    $stmt = $pdo->prepare('SELECT Subject_ID FROM tbl_subject WHERE Subject_Name = ? OR Subject_Code = ? LIMIT 1');
+                    $stmt->execute([$q['Subject'], $q['Subject']]);
+                    $subject = $stmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$subject) {
+                        $failed++;
+                        $errors[] = "Row $rowNum: Subject '{$q['Subject']}' not found";
+                        continue;
+                    }
+                    $subject_id = (int)$subject['Subject_ID'];
+                } else {
                     $failed++;
-                    $errors[] = "Row $rowNum: Subject '{$q['Subject']}' not found";
+                    $errors[] = "Row $rowNum: No subject provided";
                     continue;
                 }
 
-                $subject_id = $subject['Subject_ID'];
-                $question_text = $q['Question'];
+                $question_text = trim((string)$q['Question']);
                 $question_type = $q['Question_Type'] ?? 'Multiple Choice';
-                $points = $q['Points'] ?? 1;
 
-                // Collect answer options
-                $answers = [];
-                $correct_answer = strtoupper(trim($q['Correct_Answer'] ?? 'A'));
+                $correct_answer = strtoupper(trim((string)($q['Correct_Answer'] ?? '')));
                 if (!in_array($correct_answer, ['A', 'B', 'C', 'D', 'E'], true)) {
                     $failed++;
                     $errors[] = "Row $rowNum: Correct_Answer must be A, B, C, D, or E";
                     continue;
                 }
 
+                $answers = [];
                 foreach (['A', 'B', 'C', 'D', 'E'] as $option) {
                     $optionKey = 'Option_' . $option;
-                    if (!empty($q[$optionKey])) {
+                    $optionText = trim((string)($q[$optionKey] ?? ''));
+                    if ($optionText !== '') {
                         $answers[] = [
-                            'text' => $q[$optionKey],
+                            'text' => $optionText,
                             'is_correct' => ($option === $correct_answer)
                         ];
                     }
                 }
 
-                if (count($answers) < 5) {
+                foreach (['A', 'B', 'C', 'D'] as $requiredOption) {
+                    $optionKey = 'Option_' . $requiredOption;
+                    if (trim((string)($q[$optionKey] ?? '')) === '') {
+                        $failed++;
+                        $errors[] = "Row $rowNum: Option_{$requiredOption} is required";
+                        continue 2;
+                    }
+                }
+
+                if (count($answers) < 4) {
                     $failed++;
-                    $errors[] = "Row $rowNum: All 5 answer options (Option_A through Option_E) are required";
+                    $errors[] = "Row $rowNum: At least options A through D are required";
                     continue;
                 }
 
-                // Insert question
-                $stmt = $pdo->prepare('INSERT INTO tbl_question_bank (Subject_ID, User_ID, Question_Text, Question_Type, Added_Date) VALUES (?, ?, ?, ?, NOW())');
+                $correctOptionKey = 'Option_' . $correct_answer;
+                if (trim((string)($q[$correctOptionKey] ?? '')) === '') {
+                    $failed++;
+                    $errors[] = "Row $rowNum: Correct_Answer is {$correct_answer} but Option_{$correct_answer} is empty";
+                    continue;
+                }
+
+                if (questionPublishedColumnExists($pdo)) {
+                    $stmt = $pdo->prepare('INSERT INTO tbl_question_bank (Subject_ID, User_ID, Question_Text, Question_Type, Is_Published, Added_Date) VALUES (?, ?, ?, ?, 1, NOW())');
+                } else {
+                    $stmt = $pdo->prepare('INSERT INTO tbl_question_bank (Subject_ID, User_ID, Question_Text, Question_Type, Added_Date) VALUES (?, ?, ?, ?, NOW())');
+                }
                 $stmt->execute([$subject_id, $user_id, $question_text, $question_type]);
                 $question_id = $pdo->lastInsertId();
 
-                // Insert answers
                 foreach ($answers as $answer) {
                     $stmt = $pdo->prepare('INSERT INTO tbl_choice (Question_ID, Choice_Text, Is_Correct) VALUES (?, ?, ?)');
                     $stmt->execute([$question_id, $answer['text'], $answer['is_correct'] ? 1 : 0]);
@@ -282,7 +337,8 @@ try {
 
             $pdo->commit();
 
-            auditFromSession($pdo, 'QUESTION', 'IMPORT_QUESTIONS', "Imported {$imported} questions (failed: {$failed})", 'SUCCESS', 'question', null);
+            $subjectLabel = auditSubjectLabel($pdo, (int)$subject_id);
+            auditFromSession($pdo, 'QUESTION', 'IMPORT_QUESTIONS', "Imported {$imported} questions to {$subjectLabel} (failed: {$failed})", 'SUCCESS', 'question', null);
 
             $message = "Import completed. Imported: $imported";
             if ($failed > 0) {
@@ -305,14 +361,184 @@ try {
         }
     }
 
+    // Import into exam as draft questions (not visible in bank until exam publish)
+    if ($request_method === 'POST' && $action === 'import_exam_questions') {
+        $questions = $input['questions'] ?? [];
+        $exam_id = (int)($input['exam_id'] ?? 0);
+        $default_subject_id = (int)($input['subject_id'] ?? 0);
+        $user_id = (int)$_SESSION['user_id'];
+
+        if ($exam_id <= 0 || $default_subject_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Exam ID and subject ID are required']);
+            exit;
+        }
+
+        if (empty($questions)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'No questions provided']);
+            exit;
+        }
+
+        $examStmt = $pdo->prepare('SELECT Exam_ID, Subject_ID, Title FROM tbl_exam WHERE Exam_ID = ? LIMIT 1');
+        $examStmt->execute([$exam_id]);
+        $examRow = $examStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$examRow) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Exam not found']);
+            exit;
+        }
+
+        if ((int)$examRow['Subject_ID'] !== $default_subject_id) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Subject does not match this exam']);
+            exit;
+        }
+
+        $imported = 0;
+        $failed = 0;
+        $errors = [];
+        $createdQuestions = [];
+
+        $pdo->beginTransaction();
+
+        try {
+            $orderStmt = $pdo->prepare('SELECT COALESCE(MAX(Question_Order), 0) FROM tbl_exam_question WHERE Exam_ID = ?');
+            $orderStmt->execute([$exam_id]);
+            $questionOrder = (int)$orderStmt->fetchColumn();
+
+            foreach ($questions as $index => $q) {
+                $rowNum = $index + 2;
+
+                if (empty($q['Question']) || !trim((string)$q['Question'])) {
+                    $failed++;
+                    $errors[] = "Row $rowNum: Question text is required";
+                    continue;
+                }
+
+                $subject_id = $default_subject_id;
+                $question_text = trim((string)$q['Question']);
+                $question_type = $q['Question_Type'] ?? 'Multiple Choice';
+
+                $correct_answer = strtoupper(trim((string)($q['Correct_Answer'] ?? '')));
+                if (!in_array($correct_answer, ['A', 'B', 'C', 'D', 'E'], true)) {
+                    $failed++;
+                    $errors[] = "Row $rowNum: Correct_Answer must be A, B, C, D, or E";
+                    continue;
+                }
+
+                $answers = [];
+                foreach (['A', 'B', 'C', 'D', 'E'] as $option) {
+                    $optionKey = 'Option_' . $option;
+                    $optionText = trim((string)($q[$optionKey] ?? ''));
+                    if ($optionText !== '') {
+                        $answers[] = [
+                            'text' => $optionText,
+                            'is_correct' => ($option === $correct_answer),
+                        ];
+                    }
+                }
+
+                foreach (['A', 'B', 'C', 'D'] as $requiredOption) {
+                    $optionKey = 'Option_' . $requiredOption;
+                    if (trim((string)($q[$optionKey] ?? '')) === '') {
+                        $failed++;
+                        $errors[] = "Row $rowNum: Option_{$requiredOption} is required";
+                        continue 2;
+                    }
+                }
+
+                if (count($answers) < 4) {
+                    $failed++;
+                    $errors[] = "Row $rowNum: At least options A through D are required";
+                    continue;
+                }
+
+                $correctOptionKey = 'Option_' . $correct_answer;
+                if (trim((string)($q[$correctOptionKey] ?? '')) === '') {
+                    $failed++;
+                    $errors[] = "Row $rowNum: Correct_Answer is {$correct_answer} but Option_{$correct_answer} is empty";
+                    continue;
+                }
+
+                if (questionPublishedColumnExists($pdo)) {
+                    $stmt = $pdo->prepare('INSERT INTO tbl_question_bank (Subject_ID, User_ID, Question_Text, Question_Type, Is_Published, Added_Date) VALUES (?, ?, ?, ?, 0, NOW())');
+                    $stmt->execute([$subject_id, $user_id, $question_text, $question_type]);
+                } else {
+                    $stmt = $pdo->prepare('INSERT INTO tbl_question_bank (Subject_ID, User_ID, Question_Text, Question_Type, Added_Date) VALUES (?, ?, ?, ?, NOW())');
+                    $stmt->execute([$subject_id, $user_id, $question_text, $question_type]);
+                }
+                $question_id = (int)$pdo->lastInsertId();
+
+                foreach ($answers as $answer) {
+                    $stmt = $pdo->prepare('INSERT INTO tbl_choice (Question_ID, Choice_Text, Is_Correct) VALUES (?, ?, ?)');
+                    $stmt->execute([$question_id, $answer['text'], $answer['is_correct'] ? 1 : 0]);
+                }
+
+                $questionOrder++;
+                $eqStmt = $pdo->prepare('INSERT INTO tbl_exam_question (Exam_ID, Question_ID, Question_Order, Date_Added) VALUES (?, ?, ?, NOW())');
+                $eqStmt->execute([$exam_id, $question_id, $questionOrder]);
+
+                $choiceStmt = $pdo->prepare('SELECT Choice_ID, Choice_Text, Is_Correct FROM tbl_choice WHERE Question_ID = ? ORDER BY Choice_ID');
+                $choiceStmt->execute([$question_id]);
+                $choices = $choiceStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $createdQuestions[] = [
+                    'Question_ID' => $question_id,
+                    'Question_Text' => $question_text,
+                    'Is_Published' => 0,
+                    'choices' => $choices,
+                ];
+
+                $imported++;
+            }
+
+            $pdo->commit();
+
+            $examLabel = $examRow['Title'] ?? ('Exam #' . $exam_id);
+            auditFromSession(
+                $pdo,
+                'EXAM',
+                'IMPORT_EXAM_QUESTIONS',
+                "Imported {$imported} draft question(s) into exam {$examLabel} (failed: {$failed})",
+                'SUCCESS',
+                'exam',
+                $exam_id
+            );
+
+            $message = "Import completed. Added {$imported} question(s) to this exam (exam drafts until published).";
+            if ($failed > 0) {
+                $message .= " Failed: {$failed}.";
+            }
+
+            http_response_code(200);
+            echo json_encode([
+                'success' => true,
+                'message' => $message,
+                'imported' => $imported,
+                'failed' => $failed,
+                'errors' => $errors,
+                'questions' => $createdQuestions,
+            ]);
+            exit;
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+
     // Get questions with filters
     if ($request_method === 'GET' && ($action === 'list' || $action === 'get_questions')) {
         $course_id = $_GET['course_id'] ?? '';
+        $module_id = $_GET['module_id'] ?? '';
         $subject_id = $_GET['subject_id'] ?? '';
         $search = trim($_GET['search'] ?? '');
+        $curriculum = subjectCurriculumJoin($pdo);
 
         $query = 'SELECT q.Question_ID, q.Subject_ID, q.Question_Text, q.Question_Type, q.Added_Date,
-                         s.Subject_Name, s.Subject_Code, s.Course_ID,
+                         s.Subject_Name, s.Subject_Code,
+                         ' . $curriculum['module_select'] . '
+                         ' . $curriculum['course_id_select'] . ' AS Course_ID,
                          c.Course_Name,
                          u.Fullname AS Created_By,
                          (SELECT COUNT(DISTINCT eq.Exam_ID)
@@ -320,15 +546,20 @@ try {
                           WHERE eq.Question_ID = q.Question_ID) AS exam_usage_count
                   FROM tbl_question_bank q
                   INNER JOIN tbl_subject s ON q.Subject_ID = s.Subject_ID
-                  INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
+                  ' . $curriculum['join'] . '
                   INNER JOIN tbl_user u ON q.User_ID = u.User_ID
                   WHERE 1=1';
 
         $params = [];
 
         if (!empty($course_id)) {
-            $query .= ' AND s.Course_ID = ?';
+            $query .= ' AND ' . $curriculum['course_filter'] . ' = ?';
             $params[] = $course_id;
+        }
+
+        if (!empty($module_id) && $curriculum['module_filter']) {
+            $query .= ' AND ' . $curriculum['module_filter'] . ' = ?';
+            $params[] = $module_id;
         }
 
         if (!empty($subject_id)) {
@@ -344,6 +575,8 @@ try {
             $params[] = $like;
         }
 
+        $query .= publishedQuestionsWhereClause($pdo, 'q');
+        $query .= ' AND ' . activeArchiveCondition($pdo, 'tbl_question_bank', 'q');
         $query .= ' ORDER BY c.Course_Name ASC, s.Subject_Name ASC, q.Added_Date DESC';
 
         $stmt = $pdo->prepare($query);

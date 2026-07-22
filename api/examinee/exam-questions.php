@@ -8,6 +8,7 @@ header('Content-Type: application/json');
 session_start();
 
 require_once '../config/connection-pdo.php';
+require_once '../includes/exam-session-utils.php';
 
 /**
  * Send success response
@@ -64,9 +65,11 @@ try {
                 es.Exam_ID, 
                 es.User_ID, 
                 es.Time_Started,
+                es.Time_Ended,
                 e.Is_Randomized,
                 e.Duration,
-                e.Title
+                e.Title,
+                e.Status
             FROM tbl_exam_session es
             INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
             WHERE es.Session_ID = ?
@@ -83,18 +86,28 @@ try {
             sendError('Access denied. This session does not belong to you.', 403);
         }
 
-        $exam_id = $session['Exam_ID'];
-        $is_randomized = $session['Is_Randomized'];
-        $time_started = $session['Time_Started'];
-        $duration = $session['Duration'];
-        
-        // Check if time has expired
-        $time_expired = false;
-        if ($time_started && $duration) {
-            $start_timestamp = strtotime($time_started);
-            $deadline = $start_timestamp + ($duration * 60); // Duration in minutes
-            $time_expired = time() > $deadline;
+        if (!empty($session['Time_Ended'])) {
+            sendError('This exam has already been submitted', 400);
         }
+
+        if (($session['Status'] ?? '') !== 'Published') {
+            sendError('This exam is not available', 400);
+        }
+
+        $duration = (int)($session['Duration'] ?? 0);
+        $exam_id = (int)$session['Exam_ID'];
+        $time_started = reviveExpiredEmptySession(
+            $pdo,
+            (int)$session_id,
+            $exam_id,
+            $session['Time_Started'],
+            $duration
+        );
+
+        // Check if time has expired (after optional revival for empty attempts)
+        $time_expired = isSessionDurationExpired($time_started, $duration);
+
+        $is_randomized = $session['Is_Randomized'];
 
         // Get all questions for the exam
         $stmt = $pdo->prepare('
@@ -159,8 +172,11 @@ try {
             unset($question);
         }
 
+        $savedAnswers = fetchExamSessionSavedAnswers($pdo, (int)$session_id, $exam_id);
+
         sendSuccess([
             'questions' => $questions,
+            'saved_answers' => $savedAnswers,
             'is_randomized' => $is_randomized,
             'session_id' => $session_id,
             'time_started' => $time_started,

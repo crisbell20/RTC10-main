@@ -4,6 +4,9 @@ const EXAM_ID = window.EXAM_RESPONSES_EXAM_ID;
 let summaryData = null;
 let rankingsData = [];
 let notSubmittedData = [];
+let itemAnalysisData = null;
+let itemAnalysisLoaded = false;
+let itemAnalysisFilterBound = false;
 let detailModal = null;
 let searchTimer = null;
 
@@ -14,8 +17,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindEvents() {
-    document.getElementById('logoutBtn')?.addEventListener('click', handleLogout);
-
     document.querySelectorAll('#responseTabs .nav-link').forEach(btn => {
         btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
@@ -27,6 +28,24 @@ function bindEvents() {
     });
 
     document.getElementById('exportCsvBtn')?.addEventListener('click', exportCsv);
+    bindItemAnalysisFilters();
+}
+
+function bindItemAnalysisFilters() {
+    if (itemAnalysisFilterBound) return;
+    itemAnalysisFilterBound = true;
+
+    document.getElementById('itemAnalysisSearch')?.addEventListener('input', () => {
+        if (itemAnalysisData) {
+            renderItemAnalysisList(getFilteredItemAnalysisItems());
+        }
+    });
+
+    document.getElementById('itemAnalysisFilter')?.addEventListener('change', () => {
+        if (itemAnalysisData) {
+            renderItemAnalysisList(getFilteredItemAnalysisItems());
+        }
+    });
 }
 
 async function loadPage() {
@@ -77,6 +96,21 @@ async function loadRankings() {
     }
 }
 
+function renderExamAssignmentBadges(assignments) {
+    const items = assignments || [];
+    const container = document.getElementById('examAssignments');
+    if (!container) return;
+
+    if (!items.length) {
+        container.innerHTML = '<span class="text-muted small">No batches or sections assigned</span>';
+        return;
+    }
+
+    container.innerHTML = items.map(a =>
+        `<span class="badge bg-light text-dark border">${escapeHtml(a.label)}</span>`
+    ).join('');
+}
+
 function renderSummary(data) {
     const exam = data.exam || {};
     const passingScore = data.passing_score ?? exam.Passing_Score ?? 50;
@@ -84,6 +118,8 @@ function renderSummary(data) {
     document.getElementById('examTitle').textContent = exam.Title || 'Exam Responses';
     document.getElementById('examMeta').textContent =
         `${exam.Course_Name || ''} • ${exam.Subject_Name || ''} • ${exam.question_count || 0} items • Passing: ${formatScore(passingScore)}%`;
+
+    renderExamAssignmentBadges(exam.Assignments || []);
 
     document.getElementById('rankingsCount').textContent = data.finished_count || 0;
     document.getElementById('notSubmittedCount').textContent = data.not_submitted_count || 0;
@@ -141,6 +177,8 @@ function renderRankings(rows) {
                     <div class="fw-medium">${escapeHtml(row.Fullname)}</div>
                     <small class="text-muted">${escapeHtml(row.Academic_Number || '')}</small>
                 </td>
+                <td><small>${escapeHtml(row.batch_names || '—')}</small></td>
+                <td><small>${escapeHtml(row.section_names || '—')}</small></td>
                 <td><strong>${escapeHtml(row.score_display ?? row.Score)}</strong></td>
                 <td><strong>${formatGrade(row.grade_percent)}%</strong></td>
                 <td>${standingHtml}</td>
@@ -173,6 +211,7 @@ function renderNotSubmitted(rows) {
             <td>${escapeHtml(row.Fullname)}</td>
             <td>${escapeHtml(row.Academic_Number || '—')}</td>
             <td><small>${escapeHtml(row.batch_names || '—')}</small></td>
+            <td><small>${escapeHtml(row.section_names || '—')}</small></td>
         </tr>
     `).join('');
 }
@@ -201,6 +240,278 @@ function switchTab(tab) {
 
     document.getElementById('rankingsPanel').style.display = tab === 'rankings' ? 'block' : 'none';
     document.getElementById('notSubmittedPanel').style.display = tab === 'not-submitted' ? 'block' : 'none';
+    document.getElementById('itemAnalysisPanel').style.display = tab === 'item-analysis' ? 'block' : 'none';
+
+    if (tab === 'item-analysis') {
+        loadItemAnalysis();
+    }
+}
+
+async function loadItemAnalysis() {
+    const loading = document.getElementById('itemAnalysisLoading');
+    const content = document.getElementById('itemAnalysisContent');
+    const empty = document.getElementById('itemAnalysisEmpty');
+    const notice = document.getElementById('itemAnalysisNotice');
+
+    if (itemAnalysisLoaded && itemAnalysisData) {
+        renderItemAnalysis(itemAnalysisData);
+        return;
+    }
+
+    loading.style.display = 'block';
+    content.style.display = 'none';
+    empty.style.display = 'none';
+    notice.style.display = 'none';
+
+    try {
+        const res = await axios.get(`${API}?action=item_analysis&exam_id=${EXAM_ID}`);
+        if (!res.data.success) {
+            throw new Error(res.data.message || 'Failed to load item analysis');
+        }
+
+        itemAnalysisData = res.data.data;
+        itemAnalysisLoaded = true;
+        renderItemAnalysis(itemAnalysisData);
+    } catch (err) {
+        loading.style.display = 'none';
+        empty.style.display = 'block';
+        empty.innerHTML = `
+            <div class="alert alert-danger d-inline-block mb-0">
+                ${escapeHtml(err.response?.data?.message || err.message || 'Failed to load item analysis')}
+            </div>
+        `;
+    }
+}
+
+function renderItemAnalysis(data) {
+    const loading = document.getElementById('itemAnalysisLoading');
+    const content = document.getElementById('itemAnalysisContent');
+    const empty = document.getElementById('itemAnalysisEmpty');
+    const notice = document.getElementById('itemAnalysisNotice');
+    const meta = document.getElementById('itemAnalysisMeta');
+
+    loading.style.display = 'none';
+
+    const items = data.items || [];
+    if (!items.length || (data.total_examinees || 0) === 0) {
+        content.style.display = 'none';
+        notice.style.display = 'none';
+        empty.style.display = 'block';
+        empty.innerHTML = `
+            <i class="bi bi-bar-chart-line" style="font-size:2rem;"></i>
+            <p class="mt-2 mb-0">No finished submissions yet for item analysis.</p>
+        `;
+        return;
+    }
+
+    empty.style.display = 'none';
+    content.style.display = 'block';
+
+    if (data.not_submitted_count > 0) {
+        notice.style.display = 'block';
+        notice.className = 'alert alert-warning py-2 small mb-3';
+        notice.textContent = `${data.not_submitted_count} examinee(s) have not submitted. Analysis is based on ${data.total_examinees} finished submission(s).`;
+    } else if (data.all_completed) {
+        notice.style.display = 'block';
+        notice.className = 'alert alert-info py-2 small mb-3';
+        notice.textContent = `All ${data.assigned_count} assigned examinee(s) have completed the exam.`;
+    } else {
+        notice.style.display = 'none';
+    }
+
+    meta.textContent = `${data.total_examinees} finished submission(s). Discrimination uses top and bottom 27% groups (${data.group_size} per group).`;
+
+    renderItemAnalysisList(getFilteredItemAnalysisItems());
+}
+
+function getFilteredItemAnalysisItems() {
+    const items = itemAnalysisData?.items || [];
+    const query = (document.getElementById('itemAnalysisSearch')?.value || '').trim().toLowerCase();
+    const filter = document.getElementById('itemAnalysisFilter')?.value || 'all';
+
+    return items.filter(item => {
+        if (query) {
+            const haystack = [
+                item.question_text,
+                item.correct_answer,
+                item.difficulty_interpretation,
+                item.discrimination_interpretation,
+                `q${item.question_number}`,
+            ].join(' ').toLowerCase();
+            if (!haystack.includes(query)) {
+                return false;
+            }
+        }
+
+        if (filter === 'review') {
+            return parseFloat(item.discrimination_index) < 0;
+        }
+        if (filter === 'poor') {
+            const d = parseFloat(item.discrimination_index);
+            return Number.isFinite(d) && d >= 0 && d < 0.2;
+        }
+        if (filter === 'non-functioning') {
+            return (item.distractors || []).some(d => !d.is_correct && (parseFloat(d.percentage) || 0) === 0);
+        }
+
+        return true;
+    });
+}
+
+function renderItemAnalysisList(items) {
+    const list = document.getElementById('itemAnalysisList');
+    const countEl = document.getElementById('itemAnalysisCount');
+    const total = itemAnalysisData?.items?.length || 0;
+
+    if (countEl) {
+        countEl.textContent = items.length === total
+            ? `Showing ${total} question${total === 1 ? '' : 's'}`
+            : `Showing ${items.length} of ${total} questions`;
+    }
+
+    if (!items.length) {
+        list.innerHTML = `
+            <div class="item-analysis-empty-filter">
+                <i class="bi bi-search mb-2 d-block" style="font-size:1.5rem;"></i>
+                No questions match your search or filter.
+            </div>
+        `;
+        return;
+    }
+
+    list.innerHTML = items.map(item => renderItemAnalysisCard(item, itemAnalysisData.total_examinees)).join('');
+}
+
+function renderItemAnalysisChoiceBars(distractors) {
+    return (distractors || []).map(choice => {
+        const percentage = Math.max(0, Math.min(100, parseFloat(choice.percentage) || 0));
+        const count = choice.count ?? 0;
+        const isCorrect = !!choice.is_correct;
+        const isEmpty = count === 0;
+        const wideFill = percentage >= 18;
+
+        const rowClass = isCorrect
+            ? 'item-analysis-choice-row is-correct-answer'
+            : 'item-analysis-choice-row';
+        const trackClass = [
+            'item-analysis-bar-track',
+            isEmpty ? 'is-empty' : '',
+            wideFill ? 'has-wide-fill' : '',
+        ].filter(Boolean).join(' ');
+
+        const fillClass = isCorrect
+            ? 'item-analysis-bar-fill is-correct-answer'
+            : 'item-analysis-bar-fill';
+        const fillHtml = isEmpty
+            ? ''
+            : `<div class="${fillClass}" style="width:${percentage}%;"></div>`;
+
+        const barLabel = formatBarSelectionLabel(count, percentage);
+
+        const tags = [];
+        if (isCorrect) {
+            tags.push('<span class="item-analysis-tag is-correct-answer">Correct Answer</span>');
+        } else {
+            const distractorLabel = interpretDistractorLabel(percentage);
+            if (distractorLabel) {
+                tags.push(`<span class="item-analysis-tag">${escapeHtml(distractorLabel)}</span>`);
+            }
+        }
+
+        return `
+            <div class="${rowClass}">
+                <div class="item-analysis-choice-label">
+                    <span><span class="choice-letter">${escapeHtml(choice.choice_label)}.</span>${escapeHtml(choice.choice_text)}</span>
+                    ${tags.join('')}
+                </div>
+                <div class="item-analysis-bar-row">
+                    <div class="${trackClass}">
+                        ${fillHtml}
+                        <span class="item-analysis-bar-label">${escapeHtml(barLabel)}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function formatBarSelectionLabel(count, percentage) {
+    const examineeWord = count === 1 ? 'examinee' : 'examinees';
+    return `Selected by ${count} ${examineeWord} | ${formatPercent(percentage)}`;
+}
+
+function interpretDistractorLabel(percentage) {
+    if (percentage === 0) {
+        return 'Non-functioning Distractor';
+    }
+    if (percentage < 5) {
+        return 'Weak Distractor';
+    }
+    return 'Functional Distractor';
+}
+
+function renderItemAnalysisCard(item, totalExaminees) {
+    return `
+        <article class="item-analysis-card" id="itemAnalysisQ${item.question_id}">
+            <div class="item-analysis-card-header">
+                <span class="item-analysis-qnum-badge">Question ${item.question_number}</span>
+                <p class="item-analysis-question">${escapeHtml(item.question_text)}</p>
+            </div>
+            <div class="item-analysis-metrics">
+                <div class="item-analysis-metric">
+                    <span class="item-analysis-metric-label">Responses correct</span>
+                    <span class="item-analysis-metric-value">${item.number_correct} of ${totalExaminees}</span>
+                    <span class="item-analysis-metric-note">${item.number_wrong} incorrect or unanswered</span>
+                </div>
+                <div class="item-analysis-metric">
+                    <span class="item-analysis-metric-label">Difficulty index</span>
+                    <span class="item-analysis-metric-value">${formatIndex(item.difficulty_index)}</span>
+                    <span class="item-analysis-metric-note">${escapeHtml(item.difficulty_interpretation || '—')}</span>
+                </div>
+                <div class="item-analysis-metric">
+                    <span class="item-analysis-metric-label">Discrimination (D)</span>
+                    <span class="item-analysis-metric-value">${formatIndex(item.discrimination_index)}</span>
+                    <span class="item-analysis-metric-note">${escapeHtml(item.discrimination_interpretation || '—')}</span>
+                </div>
+            </div>
+            <div class="item-analysis-section-label">Answer choices</div>
+            <div class="item-analysis-bars">
+                ${renderItemAnalysisChoiceBars(item.distractors) || '<p class="text-muted small mb-0">No choices found.</p>'}
+            </div>
+        </article>
+    `;
+}
+
+function formatIndex(value) {
+    const num = parseFloat(value);
+    return Number.isFinite(num) ? num.toFixed(2) : '—';
+}
+
+function formatPercent(value) {
+    const num = parseFloat(value);
+    return Number.isFinite(num) ? `${num.toFixed(1)}%` : '—';
+}
+
+function renderInterpretationBadge(label, type) {
+    if (!label) return '';
+    const normalized = String(label).toLowerCase();
+    let cls = 'bg-secondary';
+
+    if (type === 'difficulty') {
+        if (normalized.includes('very easy')) cls = 'bg-success';
+        else if (normalized.includes('easy')) cls = 'bg-info text-dark';
+        else if (normalized.includes('moderate')) cls = 'bg-primary';
+        else if (normalized.includes('very difficult')) cls = 'bg-danger';
+        else if (normalized.includes('difficult')) cls = 'bg-warning text-dark';
+    } else {
+        if (normalized.includes('excellent')) cls = 'bg-success';
+        else if (normalized.includes('good')) cls = 'bg-primary';
+        else if (normalized.includes('fair')) cls = 'bg-warning text-dark';
+        else if (normalized.includes('poor')) cls = 'bg-danger';
+        else if (normalized.includes('review')) cls = 'bg-dark';
+    }
+
+    return `<span class="badge ${cls} interpretation-badge ms-1">${escapeHtml(label)}</span>`;
 }
 
 async function viewDetail(resultId) {
@@ -229,7 +540,7 @@ function renderDetail(data) {
 
     const questionsHtml = (data.questions || []).map((q, index) => {
         const isCorrect = String(q.user_is_correct) === '1';
-        const isAnswered = q.user_answer_id != null;
+        const isAnswered = q.Answer_ID != null || q.user_answer_id != null || (q.user_answer_text && String(q.user_answer_text).trim() !== '');
         const cardClass = isAnswered ? (isCorrect ? 'correct' : 'incorrect') : '';
 
         const choicesHtml = (q.choices || []).map(choice => {
@@ -264,6 +575,8 @@ function renderDetail(data) {
                 <div class="col-md-4"><strong>Submitted:</strong> ${formatDateTime(data.Submission_Date)}</div>
                 <div class="col-md-4"><strong>Passing score:</strong> ${formatScore(data.passing_score ?? data.Passing_Score)}%</div>
                 <div class="col-md-4"><strong>Academic No.:</strong> ${escapeHtml(data.Academic_Number || '—')}</div>
+                <div class="col-md-4"><strong>Batch:</strong> ${escapeHtml(data.batch_names || '—')}</div>
+                <div class="col-md-4"><strong>Section:</strong> ${escapeHtml(data.section_names || '—')}</div>
             </div>
         </div>
         ${questionsHtml || '<p class="text-muted">No questions found.</p>'}
@@ -274,8 +587,7 @@ function exportCsv() {
     if (!rankingsData.length) return;
 
     const headers = [
-        'Personnel Rank', 'Name', 'Academic Number', 'Score', 'Grade (%)',
-        'Standing', 'Remarks', 'Time Taken', 'Submitted'
+        'Personnel Rank', 'Name', 'Batch', 'Section', 'Score', 'Grade (%)', 'Standing', 'Remarks'
     ];
     const lines = [headers.join(',')];
 
@@ -283,13 +595,12 @@ function exportCsv() {
         lines.push([
             csvCell(row.Personnel_Rank),
             csvCell(row.Fullname),
-            csvCell(row.Academic_Number),
+            csvCell(row.batch_names),
+            csvCell(row.section_names),
             csvCell(row.score_display ?? row.Score),
             formatGrade(row.grade_percent),
             row.standing ?? row.rank,
-            csvCell(row.remarks || row.status),
-            csvCell(row.time_taken),
-            csvCell(row.Submission_Date)
+            csvCell(row.remarks || row.status)
         ].join(','));
     });
 
@@ -326,22 +637,6 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text ?? '';
     return div.innerHTML;
-}
-
-function handleLogout(e) {
-    e.preventDefault();
-    Swal.fire({
-        title: 'Logout',
-        text: 'Are you sure you want to logout?',
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, logout'
-    }).then(result => {
-        if (result.isConfirmed) {
-            fetch('../../api/auth/logout.php', { method: 'POST' })
-                .finally(() => { window.location.href = '../../html/auth/login.html'; });
-        }
-    });
 }
 
 window.viewDetail = viewDetail;

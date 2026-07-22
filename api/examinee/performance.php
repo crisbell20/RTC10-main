@@ -172,17 +172,29 @@ function fetchSubjectRollup(PDO $pdo, int $userId, array $dateFilter): array {
 function fetchPerformanceTrend(PDO $pdo, int $userId, array $dateFilter): array {
     $stmt = $pdo->prepare("
         SELECT
-            DATE(r.Submission_Date) AS date,
-            ROUND(AVG(r.Percentage), 1) AS avg_score,
-            COUNT(*) AS submission_count
+            r.Submission_Date AS date,
+            ROUND(r.Percentage, 1) AS score,
+            e.Title AS exam_title,
+            s.Subject_Name AS subject_name
         FROM tbl_result r
         INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
+        INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
+        INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
         WHERE es.User_ID = ? AND {$dateFilter['sql']}
-        GROUP BY DATE(r.Submission_Date)
-        ORDER BY date ASC
+        ORDER BY r.Submission_Date ASC
     ");
     $stmt->execute(array_merge([$userId], $dateFilter['params']));
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($rows as &$row) {
+        if (!empty($row['date'])) {
+            $row['date'] = date('Y-m-d H:i:s', strtotime($row['date']));
+        }
+        $row['score'] = (float)($row['score'] ?? 0);
+    }
+    unset($row);
+
+    return $rows;
 }
 
 function fetchOverallSummary(PDO $pdo, int $userId, array $dateFilter): array {
@@ -326,7 +338,7 @@ function buildRecommendations(array $subjects, array $untakenBySubject): array {
                 'type' => 'study',
                 'subject_id' => $sid,
                 'subject_name' => $name,
-                'message' => "Focus on {$name}: " . implode(', ', array_unique($reasons)) . '. Review your past exam results and prepare before retaking.',
+                'message' => "Focus on {$name}: " . implode(', ', array_unique($reasons)) . '. Review previous results and study ahead for upcoming exams.',
                 'action' => 'view_subject',
             ];
         } elseif ($status === 'Strong') {
@@ -361,43 +373,6 @@ function buildRecommendations(array $subjects, array $untakenBySubject): array {
     return array_slice($recommendations, 0, 8);
 }
 
-function fetchQuestionAccuracy(PDO $pdo, int $userId, int $subjectId, array $dateFilter): ?array {
-    try {
-        $stmt = $pdo->prepare("
-            SELECT
-                COUNT(a.Answer_ID) AS total_answered,
-                SUM(CASE WHEN a.Is_Correct = 1 THEN 1 ELSE 0 END) AS correct_count
-            FROM tbl_answer a
-            INNER JOIN tbl_result r ON a.Result_ID = r.Result_ID
-            INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
-            INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
-            INNER JOIN tbl_question_bank qb ON a.Question_ID = qb.Question_ID
-            WHERE es.User_ID = ?
-            AND qb.Subject_ID = ?
-            AND {$dateFilter['sql']}
-        ");
-        $stmt->execute(array_merge([$userId, $subjectId], $dateFilter['params']));
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        if (!$row || (int)$row['total_answered'] === 0) {
-            return null;
-        }
-
-        $total = (int)$row['total_answered'];
-        $correct = (int)$row['correct_count'];
-
-        return [
-            'total_answered' => $total,
-            'correct_count' => $correct,
-            'incorrect_count' => $total - $correct,
-            'accuracy' => round(($correct / $total) * 100, 1),
-        ];
-    } catch (PDOException $e) {
-        error_log('Question accuracy query error: ' . $e->getMessage());
-        return null;
-    }
-}
-
 try {
     $dateRange = $_GET['date_range'] ?? 'all';
     if (!in_array($dateRange, ['30', '90', 'all'], true)) {
@@ -412,24 +387,6 @@ try {
             $trend = fetchPerformanceTrend($pdo, $userId, $dateFilter);
             $untaken = fetchUntakenExamsBySubject($pdo, $userId);
 
-            $bestSubject = null;
-            $weakestSubject = null;
-            if ($subjects) {
-                $sorted = $subjects;
-                usort($sorted, fn($a, $b) => (float)$b['avg_percentage'] <=> (float)$a['avg_percentage']);
-                $bestSubject = [
-                    'Subject_ID' => (int)$sorted[0]['Subject_ID'],
-                    'Subject_Name' => $sorted[0]['Subject_Name'],
-                    'avg_percentage' => (float)$sorted[0]['avg_percentage'],
-                ];
-                $last = $sorted[count($sorted) - 1];
-                $weakestSubject = [
-                    'Subject_ID' => (int)$last['Subject_ID'],
-                    'Subject_Name' => $last['Subject_Name'],
-                    'avg_percentage' => (float)$last['avg_percentage'],
-                ];
-            }
-
             $strongSubjects = array_values(array_filter($subjects, fn($s) => in_array($s['status'], ['Strong', 'On track', 'Improving'], true)));
             usort($strongSubjects, fn($a, $b) => (float)$b['avg_percentage'] <=> (float)$a['avg_percentage']);
             $strongSubjects = array_slice($strongSubjects, 0, 3);
@@ -441,11 +398,8 @@ try {
             sendSuccess([
                 'date_range' => $dateRange,
                 'summary' => $summary,
-                'best_subject' => $bestSubject,
-                'weakest_subject' => $weakestSubject,
                 'strong_subjects' => $strongSubjects,
                 'weak_subjects' => $weakSubjects,
-                'subjects' => $subjects,
                 'trend' => $trend,
                 'recommendations' => buildRecommendations($subjects, $untaken),
             ]);
@@ -539,8 +493,6 @@ try {
             $stmt->execute(array_merge([$userId, $subjectId], $dateFilter['params']));
             $subjectTrend = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-            $questionAccuracy = fetchQuestionAccuracy($pdo, $userId, $subjectId, $dateFilter);
-
             $suggestions = [];
             if ($subjectSummary) {
                 $status = $subjectSummary['status'];
@@ -571,17 +523,12 @@ try {
                 $suggestions[] = 'No completed exams in this subject yet. Check available exams on your dashboard.';
             }
 
-            if ($questionAccuracy && $questionAccuracy['accuracy'] < 70) {
-                $suggestions[] = "Question accuracy is {$questionAccuracy['accuracy']}%. Review questions you answered incorrectly.";
-            }
-
             sendSuccess([
                 'date_range' => $dateRange,
                 'subject' => $subject,
                 'summary' => $subjectSummary,
                 'attempts' => $attempts,
                 'trend' => $subjectTrend,
-                'question_accuracy' => $questionAccuracy,
                 'suggestions' => array_values(array_unique($suggestions)),
             ]);
             break;

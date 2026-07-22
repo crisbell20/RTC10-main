@@ -8,33 +8,19 @@ if (!isset($_SESSION['user_id']) || $_SESSION['user_role'] !== 'Examinee') {
 
 $userName = $_SESSION['user_name'] ?? 'User';
 $resultId = $_GET['result_id'] ?? null;
+
+require __DIR__ . '/../includes/examinee-watermark.php';
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title><?= $resultId ? 'Exam Result Details' : 'My Results' ?> - PNP RTC X</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <link rel="stylesheet" href="../../assets/css/dashboard.css">
     <style>
-        .sidebar-menu .menu-label {
-            display: block;
-            padding: 12px 20px;
-            color: #9ca3af;
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            cursor: default;
-            pointer-events: none;
-        }
-        .sidebar-menu .menu-label i {
-            margin-right: 8px;
-            font-size: 1rem;
-            opacity: 0.7;
-        }
         .result-summary {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -126,8 +112,10 @@ $resultId = $_GET['result_id'] ?? null;
             transform: translateY(-2px);
         }
     </style>
+    <link rel="stylesheet" href="../../assets/css/examinee-responsive.css?v=4">
+    <link rel="stylesheet" href="../../assets/css/examinee-watermark.css?v=4">
 </head>
-<body>
+<body class="examinee-portal">
     <div class="top-nav">
         <div class="nav-brand">
             <h5>PNP Regional Training Center X</h5>
@@ -143,15 +131,11 @@ $resultId = $_GET['result_id'] ?? null;
     <div class="dashboard-container">
         <!-- Sidebar -->
         <div class="sidebar">
-            <ul class="sidebar-menu">
-                <li><a href="../examinee/dashboard.php"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
-                <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
-                <li><a href="../examinee/dashboard.php#available-exams"><i class="bi bi-pencil-square"></i>Take Exam</a></li>
-                <li><a href="result.php" class="active"><i class="bi bi-clipboard-check"></i>Results</a></li>
-                <li><a href="perfomance.php"><i class="bi bi-graph-up"></i>Performance</a></li>
-                <li><a href="schedule.php"><i class="bi bi-calendar-event"></i>Schedule</a></li>
-                <li><a href="profile.php"><i class="bi bi-person-circle"></i>Profile</a></li>
-            </ul>
+            <?php
+            $examineeNavFrom = 'masterfiles';
+            $examineeNavActive = 'results';
+            require __DIR__ . '/../includes/examinee-sidebar.php';
+            ?>
         </div>
 
         <div class="main-content">
@@ -183,44 +167,30 @@ $resultId = $_GET['result_id'] ?? null;
                             <p>Review your answers and see the correct solutions</p>
                         </div>
                     </div>
-                    <div class="section-body" id="questionsList"></div>
+                    <div class="section-body watermark-shield" id="questionsShield">
+                        <div id="questionsList" class="watermark-shield-content"></div>
+                        <?php renderExamineeWatermarkLayer(null, 54); ?>
+                    </div>
                 </div>
             </div>
             <?php endif; ?>
         </div>
     </div>
 
+    <?php
+    $examineeNavFrom = 'masterfiles';
+    $examineeNavActive = 'results';
+    require __DIR__ . '/../includes/examinee-bottom-nav.php';
+    ?>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
+    <script src="../../assets/js/logout-handler.js?v=1"></script>
+    <script src="../../assets/js/examinee-responsive-nav.js?v=1"></script>
     <script src="../../assets/js/auto-logout.js"></script>
     <script>
         const resultId = <?= json_encode($resultId) ?>;
-
-        // Logout handler
-        document.getElementById('logoutBtn').addEventListener('click', function(e) {
-            e.preventDefault();
-            Swal.fire({
-                title: 'Logout',
-                text: 'Are you sure you want to logout?',
-                icon: 'question',
-                showCancelButton: true,
-                confirmButtonText: 'Yes, logout',
-                cancelButtonText: 'No, stay',
-                confirmButtonColor: '#2563eb',
-                cancelButtonColor: '#6b7280'
-            }).then((result) => {
-                if (result.isConfirmed) {
-                    fetch('../../api/auth/logout.php', {
-                        method: 'POST'
-                    }).then(() => {
-                        window.location.href = '../../login.php';
-                    }).catch(() => {
-                        window.location.href = '../../login.php';
-                    });
-                }
-            });
-        });
 
         if (resultId) {
             loadResultDetails();
@@ -258,18 +228,18 @@ $resultId = $_GET['result_id'] ?? null;
                 const canView = result.can_view_details !== false;
                 
                 return `
-                    <div class="result-card" ${canView ? `onclick="window.location.href='result.php?result_id=${result.Result_ID}'"` : 'style="cursor: default;" title="Response review is disabled for this exam"'}>
-                        <div class="d-flex justify-content-between align-items-start">
-                            <div class="flex-grow-1">
+                    <div class="result-card examinee-data-card${canView ? ' examinee-clickable-card' : ' result-card-disabled'}" ${canView ? `onclick="window.location.href='result.php?result_id=${result.Result_ID}'"` : 'title="Response review is disabled for this exam"'}>
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div class="flex-grow-1 min-w-0">
                                 <h5 class="mb-2">${escapeHtml(result.exam_title)}</h5>
                                 <p class="text-muted mb-2">${result.Subject_Name ? escapeHtml(result.Subject_Name) : 'N/A'}</p>
-                                <div class="d-flex gap-3 mb-2">
+                                <div class="d-flex gap-3 mb-2 result-card-meta">
                                     <span><i class="bi bi-calendar3"></i> ${formatDate(result.Submission_Date)}</span>
                                     <span><i class="bi bi-clock"></i> ${result.time_taken || 'N/A'}</span>
                                 </div>
                                 ${!canView ? '<small class="text-muted"><i class="bi bi-lock"></i> Response review disabled</small>' : ''}
                             </div>
-                            <div class="text-end">
+                            <div class="text-end flex-shrink-0">
                                 <span class="badge ${isPassed ? 'bg-success' : 'bg-danger'} mb-2">
                                     ${result.Remarks}
                                 </span>

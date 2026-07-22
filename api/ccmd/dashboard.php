@@ -28,15 +28,6 @@ try {
             error_log("Error getting active participants: " . $e->getMessage());
         }
 
-        // Cheating incidents (if table exists)
-        $cheatingIncidents = 0;
-        try {
-            $stmt = $pdo->query("SELECT COUNT(*) as count FROM tbl_cheating_incident");
-            $cheatingIncidents = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
-        } catch (Exception $e) {
-            error_log("Cheating incident table not found: " . $e->getMessage());
-        }
-
         // Completed exams today
         $completedToday = 0;
         try {
@@ -52,7 +43,6 @@ try {
             'data' => [
                 'active_exams' => $activeExams,
                 'active_participants' => $activeParticipants,
-                'cheating_incidents' => $cheatingIncidents,
                 'completed_today' => $completedToday
             ]
         ]);
@@ -91,47 +81,6 @@ try {
             echo json_encode(['success' => false, 'message' => 'Error loading exams: ' . $e->getMessage()]);
             exit;
         }
-    }
-
-    // Get cheating incidents
-    if ($action === 'incidents') {
-        // Check if cheating incident table exists
-        $tables = $pdo->query("SHOW TABLES LIKE 'tbl_cheating_incident'")->fetchAll();
-        
-        if (empty($tables)) {
-            // Table doesn't exist, return empty array
-            http_response_code(200);
-            echo json_encode(['success' => true, 'data' => []]);
-            exit;
-        }
-
-        try {
-            $stmt = $pdo->query("
-                SELECT
-                    ci.Incident_ID,
-                    u.Fullname AS Trainee_Name,
-                    e.Title AS Exam_Name,
-                    ci.Reason AS Violation_Type,
-                    ci.Timestamp AS Detected_Time,
-                    ci.Status AS Action_Status
-                FROM tbl_cheating_incident ci
-                INNER JOIN tbl_exam_session es ON ci.Session_ID = es.Session_ID
-                INNER JOIN tbl_user u ON es.User_ID = u.User_ID
-                INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
-                ORDER BY ci.Timestamp DESC
-                LIMIT 10
-            ");
-
-            $incidents = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {
-            // Query failed, return empty array
-            error_log("Error getting incidents: " . $e->getMessage());
-            $incidents = [];
-        }
-
-        http_response_code(200);
-        echo json_encode(['success' => true, 'data' => $incidents]);
-        exit;
     }
 
     http_response_code(400);

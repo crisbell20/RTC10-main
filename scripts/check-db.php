@@ -5,13 +5,13 @@ echo "=== DATABASE CHECK ===\n\n";
 
 // Check users
 echo "Users in database:\n";
-$stmt = $pdo->query("SELECT User_ID, Email, Username, Role_ID, Status, LENGTH(Password_Hash) as hash_len FROM tbl_user");
+$stmt = $pdo->query("SELECT User_ID, Email, Fullname, Role_ID, Status, LENGTH(Password_Hash) as hash_len FROM tbl_user");
 $users = $stmt->fetchAll();
 
 foreach ($users as $user) {
     echo "  ID: {$user['User_ID']}\n";
     echo "  Email: {$user['Email']}\n";
-    echo "  Username: {$user['Username']}\n";
+    echo "  Fullname: {$user['Fullname']}\n";
     echo "  Role_ID: {$user['Role_ID']}\n";
     echo "  Status: {$user['Status']}\n";
     echo "  Password Hash Length: {$user['hash_len']}\n";

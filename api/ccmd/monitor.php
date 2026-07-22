@@ -13,6 +13,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['user_role'] !== 'CCMD') {
 }
 
 require_once __DIR__ . '/../config/connection-pdo.php';
+require_once __DIR__ . '/../includes/exam-participant-utils.php';
 
 $action = $_GET['action'] ?? '';
 
@@ -28,24 +29,56 @@ function sendError($message, $statusCode = 400) {
 }
 
 function countAssignedExaminees(PDO $pdo, int $examId): int {
-    try {
-        $tableCheck = $pdo->query("SHOW TABLES LIKE 'tbl_user_batch'");
-        if (!$tableCheck || $tableCheck->rowCount() === 0) {
-            return 0;
-        }
-    } catch (Exception $e) {
-        return 0;
+    return count(listExamMonitorExaminees($pdo, $examId));
+}
+
+function monitorParticipantUserIds(PDO $pdo, int $examId): array {
+    return array_values(array_unique(array_map(
+        fn(array $row) => (int)$row['User_ID'],
+        listExamMonitorExaminees($pdo, $examId)
+    )));
+}
+
+function sessionProgressCounts(PDO $pdo, array $sessionIds, int $examId): array
+{
+    $sessionIds = array_values(array_filter(array_map('intval', $sessionIds)));
+    if (empty($sessionIds)) {
+        return [];
     }
 
-    $stmt = $pdo->prepare('
-        SELECT COUNT(DISTINCT ub.User_ID) AS total
-        FROM tbl_exam_batch eb
-        INNER JOIN tbl_user_batch ub ON eb.Batch_ID = ub.Batch_ID
-        WHERE eb.Exam_ID = ?
-          AND ub.Status = \'Active\'
-    ');
-    $stmt->execute([$examId]);
-    return (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    $placeholders = implode(',', array_fill(0, count($sessionIds), '?'));
+    $stmt = $pdo->prepare("
+        SELECT
+            es.Session_ID,
+            (
+                SELECT COUNT(*)
+                FROM tbl_answer a
+                INNER JOIN tbl_exam_question eq ON eq.Question_ID = a.Question_ID AND eq.Exam_ID = ?
+                WHERE a.Session_ID = es.Session_ID
+                  AND (a.Choice_ID IS NOT NULL OR (a.Answer_Correct IS NOT NULL AND TRIM(a.Answer_Correct) != ''))
+            ) AS answered_count,
+            (
+                SELECT COUNT(*)
+                FROM tbl_answer a
+                INNER JOIN tbl_exam_question eq ON eq.Question_ID = a.Question_ID AND eq.Exam_ID = ?
+                WHERE a.Session_ID = es.Session_ID
+                  AND a.Is_Correct = 1
+                  AND (a.Choice_ID IS NOT NULL OR (a.Answer_Correct IS NOT NULL AND TRIM(a.Answer_Correct) != ''))
+            ) AS correct_count
+        FROM tbl_exam_session es
+        WHERE es.Session_ID IN ({$placeholders})
+    ");
+    $stmt->execute(array_merge([$examId, $examId], $sessionIds));
+
+    $map = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $map[(int)$row['Session_ID']] = [
+            'answered_count' => (int)($row['answered_count'] ?? 0),
+            'correct_count' => (int)($row['correct_count'] ?? 0),
+        ];
+    }
+
+    return $map;
 }
 
 function formatTimeRemaining(?string $timeStarted, ?int $durationMinutes): ?array {
@@ -118,29 +151,26 @@ try {
         }
 
         $assigned = countAssignedExaminees($pdo, $examId);
+        $participantIds = monitorParticipantUserIds($pdo, $examId);
 
-        $stmt = $pdo->prepare('
-            SELECT
-                SUM(CASE WHEN es.Time_Ended IS NULL AND es.Time_Started IS NOT NULL THEN 1 ELSE 0 END) AS in_progress,
-                SUM(CASE WHEN es.Time_Ended IS NOT NULL THEN 1 ELSE 0 END) AS completed
-            FROM tbl_exam_session es
-            WHERE es.Exam_ID = ?
-        ');
-        $stmt->execute([$examId]);
-        $counts = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
-
-        $inProgress = (int)($counts['in_progress'] ?? 0);
-        $completed = (int)($counts['completed'] ?? 0);
+        $inProgress = 0;
+        $completed = 0;
+        if (!empty($participantIds)) {
+            $idPlaceholders = implode(',', array_fill(0, count($participantIds), '?'));
+            $stmt = $pdo->prepare("
+                SELECT
+                    SUM(CASE WHEN es.Time_Ended IS NULL AND es.Time_Started IS NOT NULL THEN 1 ELSE 0 END) AS in_progress,
+                    SUM(CASE WHEN es.Time_Ended IS NOT NULL THEN 1 ELSE 0 END) AS completed
+                FROM tbl_exam_session es
+                WHERE es.Exam_ID = ?
+                  AND es.User_ID IN ({$idPlaceholders})
+            ");
+            $stmt->execute(array_merge([$examId], $participantIds));
+            $counts = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $inProgress = (int)($counts['in_progress'] ?? 0);
+            $completed = (int)($counts['completed'] ?? 0);
+        }
         $notStarted = max(0, $assigned - $completed - $inProgress);
-
-        $stmt = $pdo->prepare('
-            SELECT COUNT(DISTINCT ci.Incident_ID) AS open_incidents
-            FROM tbl_cheating_incident ci
-            INNER JOIN tbl_exam_session es ON ci.Session_ID = es.Session_ID
-            WHERE es.Exam_ID = ? AND ci.Status = \'Open\'
-        ');
-        $stmt->execute([$examId]);
-        $openIncidents = (int)($stmt->fetch(PDO::FETCH_ASSOC)['open_incidents'] ?? 0);
 
         sendSuccess([
             'exam' => $exam,
@@ -148,7 +178,6 @@ try {
             'in_progress' => $inProgress,
             'completed' => $completed,
             'not_started' => $notStarted,
-            'open_incidents' => $openIncidents,
         ]);
     }
 
@@ -175,78 +204,58 @@ try {
             sendError('Exam not found', 404);
         }
         $duration = (int)($examRow['Duration'] ?? 0);
-        $questionCount = 0;
         $qStmt = $pdo->prepare('SELECT COUNT(*) AS c FROM tbl_exam_question WHERE Exam_ID = ?');
         $qStmt->execute([$examId]);
         $questionCount = (int)($qStmt->fetch(PDO::FETCH_ASSOC)['c'] ?? 0);
 
-        $params = [$examId, $examId];
-        $searchSql = '';
-        if ($search !== '') {
-            $searchSql = ' AND (u.Fullname LIKE ? OR u.Academic_Number LIKE ? OR u.Username LIKE ?)';
-            $like = '%' . $search . '%';
-            $params[] = $like;
-            $params[] = $like;
-            $params[] = $like;
+        $participants = listExamMonitorExaminees($pdo, $examId);
+        $participantIds = array_map(fn($p) => (int)$p['User_ID'], $participants);
+
+        $sessionsByUser = [];
+        if (!empty($participantIds)) {
+            $idPlaceholders = implode(',', array_fill(0, count($participantIds), '?'));
+            $sessionStmt = $pdo->prepare("
+                SELECT Session_ID, User_ID, Time_Started, Time_Ended
+                FROM tbl_exam_session
+                WHERE Exam_ID = ?
+                  AND User_ID IN ({$idPlaceholders})
+                ORDER BY Session_ID DESC
+            ");
+            $sessionStmt->execute(array_merge([$examId], $participantIds));
+            foreach ($sessionStmt->fetchAll(PDO::FETCH_ASSOC) as $sessionRow) {
+                $uid = (int)$sessionRow['User_ID'];
+                if (!isset($sessionsByUser[$uid])) {
+                    $sessionsByUser[$uid] = $sessionRow;
+                }
+            }
         }
 
-        $sql = "
-            SELECT
-                u.User_ID,
-                u.Fullname,
-                u.Academic_Number,
-                u.Username,
-                es.Session_ID,
-                es.Time_Started,
-                es.Time_Ended,
-                (
-                    SELECT GROUP_CONCAT(DISTINCT b.Batch_Name ORDER BY b.Batch_Name SEPARATOR ', ')
-                    FROM tbl_exam_batch eb
-                    INNER JOIN tbl_user_batch ub2 ON eb.Batch_ID = ub2.Batch_ID AND ub2.User_ID = u.User_ID AND ub2.Status = 'Active'
-                    INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
-                    WHERE eb.Exam_ID = ?
-                ) AS batch_names,
-                (
-                    SELECT COUNT(*)
-                    FROM tbl_answer a
-                    WHERE a.Session_ID = es.Session_ID
-                ) AS answered_count,
-                (
-                    SELECT COUNT(*)
-                    FROM tbl_cheating_log cl
-                    WHERE cl.Session_ID = es.Session_ID
-                ) AS violation_count,
-                (
-                    SELECT COUNT(*)
-                    FROM tbl_cheating_incident ci
-                    WHERE ci.Session_ID = es.Session_ID AND ci.Status = 'Open'
-                ) AS open_incident
-            FROM tbl_exam_batch eb
-            INNER JOIN tbl_user_batch ub ON eb.Batch_ID = ub.Batch_ID
-            INNER JOIN tbl_user u ON ub.User_ID = u.User_ID
-            LEFT JOIN tbl_exam_session es ON es.Exam_ID = eb.Exam_ID AND es.User_ID = u.User_ID
-            WHERE eb.Exam_ID = ?
-              AND ub.Status = 'Active'
-              {$searchSql}
-            GROUP BY u.User_ID, u.Fullname, u.Academic_Number, u.Username, es.Session_ID, es.Time_Started, es.Time_Ended
-            ORDER BY
-                CASE
-                    WHEN es.Time_Ended IS NULL AND es.Time_Started IS NOT NULL THEN 0
-                    WHEN es.Time_Ended IS NOT NULL THEN 2
-                    ELSE 1
-                END,
-                u.Fullname ASC
-        ";
+        $sessionIds = array_map(fn($row) => (int)$row['Session_ID'], $sessionsByUser);
+        $progressBySession = sessionProgressCounts($pdo, $sessionIds, $examId);
 
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute($params);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $searchLower = $search !== '' ? strtolower($search) : '';
 
         $processed = [];
-        foreach ($rows as $row) {
-            if ($row['Time_Started'] && !$row['Time_Ended']) {
+        foreach ($participants as $participant) {
+            $userId = (int)$participant['User_ID'];
+            $fullname = (string)($participant['Fullname'] ?? '');
+            $academic = (string)($participant['Academic_Number'] ?? '');
+
+            if ($searchLower !== '') {
+                $haystack = strtolower($fullname . ' ' . $academic);
+                if (strpos($haystack, $searchLower) === false) {
+                    continue;
+                }
+            }
+
+            $session = $sessionsByUser[$userId] ?? null;
+            $timeStarted = $session['Time_Started'] ?? null;
+            $timeEnded = $session['Time_Ended'] ?? null;
+            $sessionId = isset($session['Session_ID']) ? (int)$session['Session_ID'] : null;
+
+            if ($timeStarted && !$timeEnded) {
                 $status = 'in_progress';
-            } elseif ($row['Time_Ended']) {
+            } elseif ($timeEnded) {
                 $status = 'completed';
             } else {
                 $status = 'not_started';
@@ -256,30 +265,59 @@ try {
                 continue;
             }
 
-            $answered = (int)($row['answered_count'] ?? 0);
-            $progress = $questionCount > 0 ? round(($answered / $questionCount) * 100, 1) : 0;
+            $progress = $sessionId && isset($progressBySession[$sessionId])
+                ? $progressBySession[$sessionId]
+                : ['answered_count' => 0, 'correct_count' => 0];
+
+            $answered = (int)$progress['answered_count'];
+            $answeredProgress = $questionCount > 0 ? round(($answered / $questionCount) * 100, 1) : 0;
+            $correctCount = (int)$progress['correct_count'];
+            $examScore = $status === 'completed' ? $correctCount : null;
+            $scoreDisplay = null;
+            $scoreProgress = null;
+
+            if ($status === 'completed') {
+                $scoreDisplay = $questionCount > 0
+                    ? ($correctCount . '/' . $questionCount)
+                    : (string)$correctCount;
+                if ($questionCount > 0) {
+                    $scoreProgress = round(($correctCount / $questionCount) * 100, 1);
+                }
+            }
+
             $timeRemaining = ($status === 'in_progress')
-                ? formatTimeRemaining($row['Time_Started'], $duration)
+                ? formatTimeRemaining($timeStarted, $duration)
                 : null;
 
             $processed[] = [
-                'User_ID' => (int)$row['User_ID'],
-                'Fullname' => $row['Fullname'],
-                'Academic_Number' => $row['Academic_Number'],
-                'Username' => $row['Username'],
-                'Session_ID' => $row['Session_ID'] ? (int)$row['Session_ID'] : null,
-                'batch_names' => $row['batch_names'],
+                'User_ID' => $userId,
+                'Fullname' => $fullname,
+                'Academic_Number' => $academic,
+                'Session_ID' => $sessionId,
+                'batch_names' => (string)($participant['Batch_Name'] ?? ''),
                 'status' => $status,
                 'answered_count' => $answered,
                 'question_count' => $questionCount,
-                'progress' => $progress,
-                'time_started' => $row['Time_Started'],
-                'time_ended' => $row['Time_Ended'],
+                'progress' => $answeredProgress,
+                'answered_progress' => $answeredProgress,
+                'score' => $examScore,
+                'score_display' => $scoreDisplay,
+                'score_progress' => $scoreProgress,
+                'time_started' => $timeStarted,
+                'time_ended' => $timeEnded,
                 'time_remaining' => $timeRemaining,
-                'violation_count' => (int)($row['violation_count'] ?? 0),
-                'has_open_incident' => (int)($row['open_incident'] ?? 0) > 0,
             ];
         }
+
+        usort($processed, function ($a, $b) {
+            $order = ['in_progress' => 0, 'not_started' => 1, 'completed' => 2];
+            $ao = $order[$a['status']] ?? 3;
+            $bo = $order[$b['status']] ?? 3;
+            if ($ao !== $bo) {
+                return $ao <=> $bo;
+            }
+            return strcasecmp((string)$a['Fullname'], (string)$b['Fullname']);
+        });
 
         $total = count($processed);
         $paged = array_slice($processed, $offset, $limit);
@@ -294,44 +332,6 @@ try {
             ],
             'question_count' => $questionCount,
         ]);
-    }
-
-    if ($action === 'incidents') {
-        $examId = !empty($_GET['exam_id']) ? (int)$_GET['exam_id'] : null;
-        $limit = min(50, max(5, (int)($_GET['limit'] ?? 20)));
-
-        $params = [];
-        $examFilter = '';
-        if ($examId) {
-            $examFilter = ' AND es.Exam_ID = ?';
-            $params[] = $examId;
-        }
-        $params[] = $limit;
-
-        $stmt = $pdo->prepare("
-            SELECT
-                ci.Incident_ID,
-                ci.Session_ID,
-                ci.Reason,
-                ci.Timestamp,
-                ci.Status,
-                u.Fullname AS Trainee_Name,
-                u.Academic_Number,
-                e.Exam_ID,
-                e.Title AS Exam_Name,
-                (
-                    SELECT COUNT(*) FROM tbl_cheating_log cl WHERE cl.Session_ID = ci.Session_ID
-                ) AS violation_count
-            FROM tbl_cheating_incident ci
-            INNER JOIN tbl_exam_session es ON ci.Session_ID = es.Session_ID
-            INNER JOIN tbl_user u ON es.User_ID = u.User_ID
-            INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
-            WHERE 1=1 {$examFilter}
-            ORDER BY ci.Timestamp DESC
-            LIMIT ?
-        ");
-        $stmt->execute($params);
-        sendSuccess($stmt->fetchAll(PDO::FETCH_ASSOC));
     }
 
     sendError('Invalid action');

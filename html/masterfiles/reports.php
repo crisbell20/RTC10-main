@@ -2,7 +2,7 @@
 session_start();
 
 if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Admin', 'CCMD'])) {
-    header('Location: ../../html/auth/login.html');
+    header('Location: ../../login.php');
     exit;
 }
 
@@ -42,6 +42,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <li><a href="exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
                 <li><a href="question-bank.php"><i class="bi bi-folder"></i>Question Bank</a></li>
                 <li><a href="reports.php" class="active"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
+                <li><a href="../admin/cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
                 <li><a href="archive.php"><i class="bi bi-archive"></i>Archive</a></li>
                 <li><a href="audit-logs.php"><i class="bi bi-clock-history"></i>Audit Logs</a></li>
                 <li><a href="settings.php"><i class="bi bi-gear"></i>System Settings</a></li>
@@ -59,46 +60,37 @@ $userName = $_SESSION['user_name'] ?? 'User';
             </div>
 
             <div class="filter-card">
-                <div class="row g-3">
-                    <div class="col-md-2">
-                        <label class="form-label small">Date Range</label>
-                        <select id="dateRange" class="form-select form-select-sm">
-                            <option value="7">Last 7 days</option>
-                            <option value="30" selected>Last 30 days</option>
-                            <option value="90">Last 90 days</option>
-                            <option value="365">Last year</option>
-                            <option value="all">All time</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2">
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-4">
                         <label class="form-label small">Course</label>
                         <select id="filterCourse" class="form-select form-select-sm">
                             <option value="">All courses</option>
                         </select>
                     </div>
-                    <div class="col-md-2">
-                        <label class="form-label small">Subject</label>
-                        <select id="filterSubject" class="form-select form-select-sm">
-                            <option value="">All subjects</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2">
+                    <div class="col-md-4">
                         <label class="form-label small">Batch</label>
                         <select id="filterBatch" class="form-select form-select-sm">
                             <option value="">All batches</option>
                         </select>
                     </div>
-                    <div class="col-md-2">
-                        <label class="form-label small">Search student</label>
-                        <input type="search" id="studentSearch" class="form-control form-control-sm" placeholder="Name or ID">
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small">&nbsp;</label>
-                        <button class="btn btn-primary btn-sm w-100" id="applyFiltersBtn">
-                            <i class="bi bi-funnel me-1"></i>Apply
-                        </button>
+                    <div class="col-md-4">
+                        <label class="form-label small">Section</label>
+                        <select id="filterSection" class="form-select form-select-sm" disabled>
+                            <option value="">All sections</option>
+                        </select>
                     </div>
                 </div>
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+                    <div id="filterChips" class="reports-filter-chips"></div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary ms-auto d-none" id="clearFiltersBtn">
+                        <i class="bi bi-x-circle me-1"></i>Clear filters
+                    </button>
+                </div>
+            </div>
+
+            <div id="reportsLoadingBar" class="reports-loading-bar d-none" role="status" aria-live="polite">
+                <div class="spinner-border spinner-border-sm text-primary me-2" aria-hidden="true"></div>
+                Updating reports…
             </div>
 
             <ul class="nav nav-tabs mb-4" id="reportTabs">
@@ -109,19 +101,19 @@ $userName = $_SESSION['user_name'] ?? 'User';
 
             <!-- OVERVIEW TAB -->
             <div id="tabOverview">
-                <div class="row g-3 mb-4">
+                <div class="row g-3 mb-4" id="metricsRow">
                     <div class="col-md-3">
                         <div class="metric-card">
                             <i class="bi bi-people-fill metric-icon text-primary"></i>
                             <div class="metric-value" id="activeExaminees">--</div>
-                            <div class="metric-label">Active Examinees</div>
+                            <div class="metric-label">Students Assigned</div>
                         </div>
                     </div>
                     <div class="col-md-3">
                         <div class="metric-card">
                             <i class="bi bi-pencil-square metric-icon text-success"></i>
                             <div class="metric-value" id="examsAdministered">--</div>
-                            <div class="metric-label">Exams Administered</div>
+                            <div class="metric-label">Exams</div>
                         </div>
                     </div>
                     <div class="col-md-3">
@@ -144,8 +136,11 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     <div class="section-header">
                         <div>
                             <h5><i class="bi bi-exclamation-triangle text-danger me-2"></i>At-Risk Students</h5>
-                            <p>Students needing intervention based on pass rate and scores</p>
+                            <p id="atRiskSummary">Students flagged when overdue exams are missing or pass rate falls below thresholds</p>
                         </div>
+                        <button type="button" class="btn btn-sm btn-outline-danger d-none" id="viewAllAtRiskBtn">
+                            View all at-risk
+                        </button>
                     </div>
                     <div class="section-body">
                         <div class="table-responsive">
@@ -153,7 +148,9 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                 <thead class="table-light">
                                     <tr>
                                         <th>Student</th>
-                                        <th>Exams</th>
+                                        <th>Assigned</th>
+                                        <th>Taken</th>
+                                        <th>Missing</th>
                                         <th>Avg %</th>
                                         <th>Pass Rate</th>
                                         <th>Status</th>
@@ -161,7 +158,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                     </tr>
                                 </thead>
                                 <tbody id="atRiskBody">
-                                    <tr><td colspan="6" class="text-center text-muted py-3">Loading...</td></tr>
+                                    <tr><td colspan="8" class="text-center text-muted py-3">Loading...</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -171,14 +168,24 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <div class="row g-3 mb-3">
                     <div class="col-md-6">
                         <div class="section-card">
-                            <div class="section-header"><div><h5>Performance Trend</h5><p>Average scores over time</p></div></div>
-                            <div class="section-body"><div class="chart-container"><canvas id="performanceChart"></canvas></div></div>
+                            <div class="section-header"><div><h5>Performance Trend</h5><p>Average score per exam, ordered by date</p></div></div>
+                            <div class="section-body">
+                                <div class="chart-wrapper" data-chart="performance">
+                                    <div class="chart-container"><canvas id="performanceChart"></canvas></div>
+                                    <div class="chart-empty d-none" id="performanceChartEmpty">No finished attempts for the selected filters.</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="section-card">
-                            <div class="section-header"><div><h5>Pass/Fail Distribution</h5><p>Finished submissions</p></div></div>
-                            <div class="section-body"><div class="chart-container"><canvas id="passFailChart"></canvas></div></div>
+                            <div class="section-header"><div><h5>Pass/Fail Distribution</h5><p id="passFailSubtitle">Due assigned exams in scope</p></div></div>
+                            <div class="section-body">
+                                <div class="chart-wrapper" data-chart="passFail">
+                                    <div class="chart-container"><canvas id="passFailChart"></canvas></div>
+                                    <div class="chart-empty d-none" id="passFailChartEmpty">No due assigned exams in scope for the selected filters.</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -186,54 +193,23 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <div class="row g-3 mb-3">
                     <div class="col-md-6">
                         <div class="section-card">
-                            <div class="section-header"><div><h5>Top Performing Subjects</h5><p>Highest average scores</p></div></div>
-                            <div class="section-body"><div class="chart-container"><canvas id="subjectsChart"></canvas></div></div>
+                            <div class="section-header"><div><h5>Top Performing Subjects</h5><p>Top 5 by average score</p></div></div>
+                            <div class="section-body">
+                                <div class="chart-wrapper" data-chart="topSubjects">
+                                    <div class="chart-container"><canvas id="subjectsChart"></canvas></div>
+                                    <div class="chart-empty d-none" id="subjectsChartEmpty">No subject data for the selected filters.</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="section-card">
-                            <div class="section-header"><div><h5>Subjects Needing Attention</h5><p>Lowest pass rates (min. 3 attempts)</p></div></div>
-                            <div class="section-body"><div class="chart-container"><canvas id="weakSubjectsChart"></canvas></div></div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="section-card mb-3">
-                    <div class="section-header">
-                        <div>
-                            <h5>Exam Participation</h5>
-                            <p>Click a bar to view exam responses</p>
-                        </div>
-                    </div>
-                    <div class="section-body"><div class="chart-container"><canvas id="participationChart"></canvas></div></div>
-                </div>
-
-                <div class="section-card">
-                    <div class="section-header">
-                        <div><h5>Recent Exam Attempts</h5><p>Latest finished submissions</p></div>
-                    </div>
-                    <div class="section-body">
-                        <div class="table-responsive">
-                            <table class="table table-sm align-middle">
-                                <thead class="table-light">
-                                    <tr>
-                                        <th>Examinee</th>
-                                        <th>Exam</th>
-                                        <th>Subject</th>
-                                        <th>Date</th>
-                                        <th>Score</th>
-                                        <th>%</th>
-                                        <th>Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="resultsTableBody"></tbody>
-                            </table>
-                        </div>
-                        <div class="d-flex justify-content-between align-items-center mt-2">
-                            <small class="text-muted" id="attemptsPaginationInfo"></small>
-                            <div class="btn-group btn-group-sm">
-                                <button class="btn btn-outline-secondary" id="attemptsPrevBtn" disabled>Prev</button>
-                                <button class="btn btn-outline-secondary" id="attemptsNextBtn" disabled>Next</button>
+                            <div class="section-header"><div><h5>Subjects Needing Attention</h5><p>Bottom 5 by average score</p></div></div>
+                            <div class="section-body">
+                                <div class="chart-wrapper" data-chart="weakSubjects">
+                                    <div class="chart-container"><canvas id="weakSubjectsChart"></canvas></div>
+                                    <div class="chart-empty d-none" id="weakSubjectsChartEmpty">No subject data for the selected filters.</div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -261,7 +237,10 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                     <tr>
                                         <th>Student</th>
                                         <th>Batch</th>
-                                        <th>Exams</th>
+                                        <th>Section</th>
+                                        <th>Assigned</th>
+                                        <th>Taken</th>
+                                        <th>Missing</th>
                                         <th>Avg %</th>
                                         <th>Pass Rate</th>
                                         <th>Best Subject</th>
@@ -293,7 +272,6 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                         <th>Course</th>
                                         <th>Exams</th>
                                         <th>Students</th>
-                                        <th>Attempts</th>
                                         <th>Avg %</th>
                                         <th>Pass Rate</th>
                                         <th>Range</th>
@@ -344,7 +322,9 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="../../assets/js/logout-handler.js?v=1"></script>
     <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../js/masterfiles/reports.js?v=3"></script>
+    <script>window.REPORTS_LINK_BASE = '';</script>
+    <script src="../../js/masterfiles/reports.js?v=20"></script>
 </body>
 </html>
