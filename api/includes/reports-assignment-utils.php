@@ -4,8 +4,10 @@
  */
 
 require_once __DIR__ . '/reports-utils.php';
+require_once __DIR__ . '/person-name-utils.php';
 require_once __DIR__ . '/exam-participant-utils.php';
 require_once __DIR__ . '/exam-session-utils.php';
+require_once __DIR__ . '/exam-code-utils.php';
 
 const REPORTS_EXAM_DEADLINE_GRACE_SECONDS = 0;
 
@@ -118,6 +120,7 @@ function buildEnrollmentScope(PDO $pdo, array $get): array
 function buildAssignedExamScope(PDO $pdo, array $get): array
 {
     $courseId = !empty($get['course_id']) ? (int)$get['course_id'] : null;
+    $subjectId = !empty($get['subject_id']) ? (int)$get['subject_id'] : null;
     $examType = resolveExamTypeFilter($get);
     $curriculum = subjectCurriculumJoin($pdo);
 
@@ -127,6 +130,11 @@ function buildAssignedExamScope(PDO $pdo, array $get): array
     if ($courseId) {
         $where[] = "{$curriculum['course_filter']} = ?";
         $params[] = $courseId;
+    }
+
+    if ($subjectId) {
+        $where[] = 'e.Subject_ID = ?';
+        $params[] = $subjectId;
     }
 
     if ($examType !== null && examTypeColumnExists($pdo)) {
@@ -161,6 +169,33 @@ function countEnrolledExamineesInScope(PDO $pdo, array $get): int
     return (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 }
 
+function reportsExamMatchesBatchSql(): string
+{
+    return 'EXISTS (
+        SELECT 1
+        FROM tbl_exam_batch eb
+        INNER JOIN tbl_batch assigned_b ON assigned_b.Batch_ID = eb.Batch_ID
+        LEFT JOIN tbl_academic_section sec ON sec.Section_ID = assigned_b.Section_ID
+        WHERE eb.Exam_ID = e.Exam_ID
+          AND (assigned_b.Batch_ID = ? OR sec.Batch_ID = ?)
+    )';
+}
+
+function reportsExamMatchesSectionSql(): string
+{
+    return 'EXISTS (
+        SELECT 1
+        FROM tbl_exam_batch eb
+        INNER JOIN tbl_batch assigned_b ON assigned_b.Batch_ID = eb.Batch_ID
+        LEFT JOIN tbl_academic_section sec_enroll ON sec_enroll.Section_ID = assigned_b.Section_ID
+        LEFT JOIN tbl_academic_section sec_parent
+            ON sec_parent.Batch_ID = assigned_b.Batch_ID
+           AND (assigned_b.Section_ID IS NULL OR assigned_b.Section_ID = 0)
+        WHERE eb.Exam_ID = e.Exam_ID
+          AND (sec_enroll.Section_ID = ? OR sec_parent.Section_ID = ?)
+    )';
+}
+
 /**
  * Exams in report scope (Draft excluded), respecting course and optional batch/section assignment.
  */
@@ -174,6 +209,7 @@ function countExamsInReportsScope(PDO $pdo, array $get): int
 
     $curriculum = subjectCurriculumJoin($pdo);
     $courseId = !empty($get['course_id']) ? (int)$get['course_id'] : null;
+    $subjectId = !empty($get['subject_id']) ? (int)$get['subject_id'] : null;
     if ($courseId) {
         $where[] = "{$curriculum['course_filter']} = ?";
         $params[] = $courseId;
@@ -185,22 +221,18 @@ function countExamsInReportsScope(PDO $pdo, array $get): int
         $params[] = $examType;
     }
 
+    if ($subjectId) {
+        $where[] = 'e.Subject_ID = ?';
+        $params[] = $subjectId;
+    }
+
     if ($sectionId) {
-        $where[] = 'EXISTS (
-            SELECT 1
-            FROM tbl_exam_batch eb
-            INNER JOIN tbl_academic_section sec ON sec.Batch_ID = eb.Batch_ID
-            WHERE eb.Exam_ID = e.Exam_ID
-              AND sec.Section_ID = ?
-        )';
+        $where[] = reportsExamMatchesSectionSql();
+        $params[] = $sectionId;
         $params[] = $sectionId;
     } elseif ($batchId) {
-        $where[] = 'EXISTS (
-            SELECT 1
-            FROM tbl_exam_batch eb
-            WHERE eb.Exam_ID = e.Exam_ID
-              AND eb.Batch_ID = ?
-        )';
+        $where[] = reportsExamMatchesBatchSql();
+        $params[] = $batchId;
         $params[] = $batchId;
     }
 
@@ -218,7 +250,8 @@ function countExamsInReportsScope(PDO $pdo, array $get): int
 }
 
 /**
- * Cohort pass rate using the same rules as per-student pass_rate (assignment-aware).
+ * Cohort pass rate using pooled exam obligations across students.
+ * pass_rate = (sum passed_count) / (sum eligible_assigned) × 100
  *
  * @param array<int,array<string,mixed>> $students
  * @return array{pass_rate:float, passed_obligations:int, eligible_obligations:int}
@@ -259,6 +292,25 @@ function computeCohortMeanStudentAverage(array $students): float
 }
 
 /**
+ * Mean of each student's assignment-aware avg_grade (equal weight per student).
+ *
+ * @param array<int,array<string,mixed>> $students
+ */
+function computeCohortMeanStudentGradeAverage(array $students): float
+{
+    if ($students === []) {
+        return 0.0;
+    }
+
+    $sum = 0.0;
+    foreach ($students as $student) {
+        $sum += (float)($student['avg_grade'] ?? $student['avg_percentage'] ?? 0);
+    }
+
+    return round($sum / count($students), 1);
+}
+
+/**
  * Shared assignment + finished-result context for report rollups.
  *
  * @return array{
@@ -281,15 +333,14 @@ function loadReportsAssignmentContext(PDO $pdo, array $get): array
     $assignmentSql = "
         SELECT DISTINCT
             u.User_ID,
-            u.Fullname,
-            u.Academic_Number,
+            " . personNameSql('u') . " AS Fullname,
+            u.Badge_Number,
             e.Exam_ID,
             e.Title AS exam_title,
             e.Deadline,
             e.Passing_Score,
             s.Subject_ID,
             s.Subject_Name,
-            s.Subject_Code,
             c.Course_Name
             {$examTypeSelect}
         {$scope['joins']}
@@ -313,12 +364,13 @@ function loadReportsAssignmentContext(PDO $pdo, array $get): array
                e.Exam_ID,
                e.Title AS exam_title,
                e.Deadline,
+               r.Score,
                r.Percentage,
                e.Passing_Score,
                s.Subject_ID,
                s.Subject_Name,
-               s.Subject_Code,
                c.Course_Name,
+               (SELECT COUNT(*) FROM tbl_exam_question eq WHERE eq.Exam_ID = e.Exam_ID) AS question_count,
                CASE WHEN r.Percentage >= e.Passing_Score THEN 1 ELSE 0 END AS passed,
                (
                    SELECT COUNT(*)
@@ -335,6 +387,7 @@ function loadReportsAssignmentContext(PDO $pdo, array $get): array
         {$curriculum['join']}
         INNER JOIN tbl_user u ON es.User_ID = u.User_ID
         WHERE {$filter['sql']}
+          AND " . latestFinishedResultMatchSql('es', 'r') . "
     ";
     $resultStmt = $pdo->prepare($resultSql);
     $resultStmt->execute($filter['params']);
@@ -346,8 +399,9 @@ function loadReportsAssignmentContext(PDO $pdo, array $get): array
         $takenByUserExam[$key] = $row;
     }
 
+    $rankSelect = personnelRankColumnExists($pdo) ? 'u.Personnel_Rank,' : 'NULL AS Personnel_Rank,';
     $profileSql = "
-        SELECT u.User_ID, u.Fullname, u.Academic_Number,
+        SELECT u.User_ID, " . personNameSql('u') . " AS Fullname, u.Badge_Number, {$rankSelect}
             (SELECT GROUP_CONCAT(DISTINCT COALESCE(pb.Batch_Name, enroll_b.Batch_Name) ORDER BY COALESCE(pb.Batch_Name, enroll_b.Batch_Name) SEPARATOR ', ')
              FROM tbl_user_batch ub2
              INNER JOIN tbl_batch enroll_b ON ub2.Batch_ID = enroll_b.Batch_ID
@@ -361,7 +415,7 @@ function loadReportsAssignmentContext(PDO $pdo, array $get): array
              WHERE ub3.User_ID = u.User_ID AND ub3.Status = 'Active' AND sec3.Section_Name IS NOT NULL) AS section_names
         {$scope['joins']}
         WHERE {$scope['sql']}
-        GROUP BY u.User_ID, u.Fullname, u.Academic_Number
+        GROUP BY u.User_ID, " . personNameSql('u') . ", u.Badge_Number" . (personnelRankColumnExists($pdo) ? ', u.Personnel_Rank' : '') . "
     ";
     $profileStmt = $pdo->prepare($profileSql);
     $profileStmt->execute($scope['params']);
@@ -376,6 +430,30 @@ function loadReportsAssignmentContext(PDO $pdo, array $get): array
         'taken_by_user_exam' => $takenByUserExam,
         'profiles' => $profiles,
     ];
+}
+
+/**
+ * Grade percent for assignment rollup rows (uses Score + question_count when present).
+ */
+function reportsObligationGrade(?array $resultRow, ?string $deadline): ?float
+{
+    if ($resultRow !== null) {
+        $answeredCount = (int)($resultRow['answered_count'] ?? 0);
+        $deadlineForCheck = $deadline ?? ($resultRow['Deadline'] ?? null);
+
+        if ($answeredCount === 0 && reportsExamIsOverdue($deadlineForCheck)) {
+            return 50.0;
+        }
+
+        $total = (int)($resultRow['question_count'] ?? 0);
+        return computeGradePercent((float)($resultRow['Score'] ?? 0), $total);
+    }
+
+    if (reportsExamIsOverdue($deadline)) {
+        return 50.0;
+    }
+
+    return null;
 }
 
 /**
@@ -418,6 +496,14 @@ function applyAssignmentMetricWithScoreRange(array &$bucket, ?array $resultRow, 
         return;
     }
 
+    $grade = reportsObligationGrade($resultRow, $deadline);
+    if ($grade !== null) {
+        $gradeMin = $bucket['grade_min'] ?? null;
+        $gradeMax = $bucket['grade_max'] ?? null;
+        $bucket['grade_min'] = $gradeMin === null ? $grade : min((float)$gradeMin, $grade);
+        $bucket['grade_max'] = $gradeMax === null ? $grade : max((float)$gradeMax, $grade);
+    }
+
     $min = $bucket['score_min'] ?? null;
     $max = $bucket['score_max'] ?? null;
     $bucket['score_min'] = $min === null ? $score : min((float)$min, $score);
@@ -437,11 +523,16 @@ function finalizeAssignmentRollupMetrics(array $bucket): array
         'avg_percentage' => $eligible > 0
             ? round((float)($bucket['percentage_sum'] ?? 0) / $eligible, 1)
             : 0.0,
+        'avg_grade' => $eligible > 0
+            ? round((float)($bucket['grade_sum'] ?? 0) / $eligible, 1)
+            : 0.0,
         'pass_rate' => $eligible > 0
             ? round(($passed / $eligible) * 100, 1)
             : 0.0,
         'lowest' => $bucket['score_min'] !== null ? round((float)$bucket['score_min'], 1) : 0.0,
         'highest' => $bucket['score_max'] !== null ? round((float)$bucket['score_max'], 1) : 0.0,
+        'lowest_grade' => $bucket['grade_min'] !== null ? round((float)$bucket['grade_min'], 1) : 0.0,
+        'highest_grade' => $bucket['grade_max'] !== null ? round((float)$bucket['grade_max'], 1) : 0.0,
     ];
 }
 
@@ -453,7 +544,6 @@ function newSubjectReportMetricsBucket(array $row): array
     return [
         'Subject_ID' => (int)$row['Subject_ID'],
         'Subject_Name' => $row['Subject_Name'] ?? '',
-        'Subject_Code' => $row['Subject_Code'] ?? '',
         'Course_Name' => $row['Course_Name'] ?? '',
         'exams_assigned' => 0,
         'exams_taken' => 0,
@@ -464,9 +554,12 @@ function newSubjectReportMetricsBucket(array $row): array
         'effective_failed' => 0,
         'upcoming_untaken' => 0,
         'percentage_sum' => 0.0,
+        'grade_sum' => 0.0,
         'passing_score_sum' => 0.0,
         'score_min' => null,
         'score_max' => null,
+        'grade_min' => null,
+        'grade_max' => null,
         'student_ids' => [],
         'exam_ids' => [],
     ];
@@ -481,11 +574,48 @@ function newExamReportMetricsBucket(array $row): array
     $bucket['Exam_ID'] = (int)$row['Exam_ID'];
     $bucket['exam_title'] = $row['exam_title'] ?? '';
     $bucket['Passing_Score'] = $row['Passing_Score'] ?? null;
+    $bucket['batch_name_set'] = [];
+    $bucket['section_name_set'] = [];
     if (isset($row['Exam_Type'])) {
         $bucket['Exam_Type'] = $row['Exam_Type'];
     }
 
     return $bucket;
+}
+
+/**
+ * Split a comma-separated name list into a unique set.
+ *
+ * @param array<string,bool> $set
+ */
+function reportsAddCsvNames(array &$set, ?string $csv): void
+{
+    if ($csv === null || trim($csv) === '') {
+        return;
+    }
+
+    foreach (preg_split('/\s*,\s*/', $csv) as $name) {
+        $name = trim($name);
+        if ($name !== '') {
+            $set[$name] = true;
+        }
+    }
+}
+
+/**
+ * @param array<string,bool> $set
+ */
+function reportsJoinNameSet(array $set): string
+{
+    $names = array_keys($set);
+    natcasesort($names);
+    return implode(', ', array_values($names));
+}
+
+function reportsAddExamCohortNames(array &$bucket, array $profile): void
+{
+    reportsAddCsvNames($bucket['batch_name_set'], $profile['batch_names'] ?? null);
+    reportsAddCsvNames($bucket['section_name_set'], $profile['section_names'] ?? null);
 }
 
 /**
@@ -551,14 +681,16 @@ function fetchSubjectReportMetrics(PDO $pdo, array $get): array
         $subjects[] = [
             'Subject_ID' => (int)$bucket['Subject_ID'],
             'Subject_Name' => $bucket['Subject_Name'],
-            'Subject_Code' => $bucket['Subject_Code'],
             'Course_Name' => $bucket['Course_Name'],
             'exams' => count($bucket['exam_ids']),
             'students' => count($bucket['student_ids']),
             'avg_percentage' => $metrics['avg_percentage'],
+            'avg_grade' => $metrics['avg_grade'],
             'pass_rate' => $metrics['pass_rate'],
             'lowest' => $metrics['lowest'],
             'highest' => $metrics['highest'],
+            'lowest_grade' => $metrics['lowest_grade'],
+            'highest_grade' => $metrics['highest_grade'],
         ];
     }
 
@@ -601,6 +733,7 @@ function fetchSubjectExamMetrics(PDO $pdo, array $get, int $subjectId): array
 
         $byExam[$examId]['student_ids'][$userId] = true;
         $byExam[$examId]['exams_assigned']++;
+        reportsAddExamCohortNames($byExam[$examId], $ctx['profiles'][$userId] ?? []);
         applyAssignmentMetricWithScoreRange(
             $byExam[$examId],
             $ctx['taken_by_user_exam'][$key] ?? null,
@@ -627,6 +760,7 @@ function fetchSubjectExamMetrics(PDO $pdo, array $get, int $subjectId): array
 
         $byExam[$examId]['student_ids'][$userId] = true;
         $byExam[$examId]['exams_assigned']++;
+        reportsAddExamCohortNames($byExam[$examId], $ctx['profiles'][$userId] ?? []);
         applyAssignmentMetricWithScoreRange($byExam[$examId], $row, $row['Deadline'] ?? null);
     }
 
@@ -644,7 +778,10 @@ function fetchSubjectExamMetrics(PDO $pdo, array $get, int $subjectId): array
             'Exam_Type' => $bucket['Exam_Type'] ?? null,
             'students' => count($bucket['student_ids']),
             'attempts' => (int)$bucket['eligible_assigned'],
+            'batch_names' => reportsJoinNameSet($bucket['batch_name_set'] ?? []),
+            'section_names' => reportsJoinNameSet($bucket['section_name_set'] ?? []),
             'avg_percentage' => $metrics['avg_percentage'],
+            'avg_grade' => $metrics['avg_grade'],
             'pass_rate' => $metrics['pass_rate'],
         ];
     }
@@ -718,24 +855,18 @@ function fetchStudentReportMetrics(PDO $pdo, array $get): array
         $student['avg_percentage'] = $eligible > 0
             ? round($student['percentage_sum'] / $eligible, 1)
             : 0.0;
+        $student['avg_grade'] = $eligible > 0
+            ? round(($student['grade_sum'] ?? 0) / $eligible, 1)
+            : 0.0;
         $student['avg_passing_score'] = $taken > 0
             ? round($student['passing_score_sum'] / $taken, 1)
             : 0.0;
         $student['pass_rate'] = $eligible > 0
             ? round(($passed / $eligible) * 100, 1)
             : 0.0;
-        $student['status'] = evaluateStudentStatus(
-            $examType,
-            $taken,
-            $passed,
-            (float)$student['avg_percentage'],
-            (float)$student['avg_passing_score'],
-            (int)$student['missing_overdue'],
-            $eligible,
-            (int)$student['effective_failed']
-        );
+        $student['status'] = evaluateTraineeRankingStatus($student);
 
-        unset($student['percentage_sum'], $student['passing_score_sum']);
+        unset($student['percentage_sum'], $student['grade_sum'], $student['passing_score_sum']);
         $students[] = $student;
     }
     unset($student);
@@ -746,6 +877,70 @@ function fetchStudentReportMetrics(PDO $pdo, array $get): array
 }
 
 /**
+ * Keep students with at least one eligible assignment in scope.
+ *
+ * @param array<int,array<string,mixed>> $students
+ * @return array<int,array<string,mixed>>
+ */
+function filterStudentsWithEligibleAssignments(array $students): array
+{
+    return array_values(array_filter(
+        $students,
+        fn(array $student): bool => (int)($student['eligible_assigned'] ?? 0) >= 1
+    ));
+}
+
+/**
+ * Sort trainees by performance (avg % desc, then pass rate, taken, name).
+ *
+ * @param array<int,array<string,mixed>> $students
+ */
+function sortStudentsByPerformanceDesc(array &$students): void
+{
+    usort($students, function (array $a, array $b): int {
+        $avgCompare = (float)($b['avg_percentage'] ?? 0) <=> (float)($a['avg_percentage'] ?? 0);
+        if ($avgCompare !== 0) {
+            return $avgCompare;
+        }
+
+        $passCompare = (float)($b['pass_rate'] ?? 0) <=> (float)($a['pass_rate'] ?? 0);
+        if ($passCompare !== 0) {
+            return $passCompare;
+        }
+
+        $takenCompare = (int)($b['exams_taken'] ?? 0) <=> (int)($a['exams_taken'] ?? 0);
+        if ($takenCompare !== 0) {
+            return $takenCompare;
+        }
+
+        return strcmp((string)($a['Fullname'] ?? ''), (string)($b['Fullname'] ?? ''));
+    });
+}
+
+/**
+ * Count trainees with eligible assignments in the current metrics set.
+ *
+ * @param array<int,array<string,mixed>> $students
+ */
+function countStudentsWithEligibleAssignments(array $students): int
+{
+    return count(filterStudentsWithEligibleAssignments($students));
+}
+
+/**
+ * Trainees assigned to an exam in scope, including those who have not finished.
+ *
+ * @param array<int,array<string,mixed>> $students
+ */
+function countStudentsWithAssignments(array $students): int
+{
+    return count(array_filter(
+        $students,
+        static fn(array $student): bool => (int)($student['exams_assigned'] ?? 0) >= 1
+    ));
+}
+
+/**
  * Default per-student metrics bucket for report rows.
  */
 function newStudentReportMetricsBucket(int $userId, array $profile, array $fallback = []): array
@@ -753,7 +948,8 @@ function newStudentReportMetricsBucket(int $userId, array $profile, array $fallb
     return [
         'User_ID' => $userId,
         'Fullname' => $profile['Fullname'] ?? $fallback['Fullname'] ?? '',
-        'Academic_Number' => $profile['Academic_Number'] ?? $fallback['Academic_Number'] ?? '',
+        'Badge_Number' => $profile['Badge_Number'] ?? $fallback['Badge_Number'] ?? '',
+        'Personnel_Rank' => $profile['Personnel_Rank'] ?? $fallback['Personnel_Rank'] ?? null,
         'batch_names' => $profile['batch_names'] ?? null,
         'section_names' => $profile['section_names'] ?? null,
         'exams_assigned' => 0,
@@ -765,6 +961,7 @@ function newStudentReportMetricsBucket(int $userId, array $profile, array $fallb
         'effective_failed' => 0,
         'upcoming_untaken' => 0,
         'percentage_sum' => 0.0,
+        'grade_sum' => 0.0,
         'passing_score_sum' => 0.0,
     ];
 }
@@ -800,6 +997,8 @@ function applyMissingOverdueToStudentBucket(array &$student): void
     $student['missing_overdue']++;
     $student['eligible_assigned']++;
     $student['effective_failed']++;
+    $student['percentage_sum'] += 0.0;
+    $student['grade_sum'] = ($student['grade_sum'] ?? 0) + 50.0;
 }
 
 /**
@@ -810,9 +1009,18 @@ function applyTakenExamToStudentBucket(array &$student, array $taken): void
     $student['exams_taken']++;
     $student['eligible_assigned']++;
     $student['passing_score_sum'] += (float)$taken['Passing_Score'];
-    $pct = (float)$taken['Percentage'];
-    $student['percentage_sum'] += $pct;
-    if ((int)$taken['passed'] === 1) {
+
+    $rawPct = (float)$taken['Percentage'];
+    $gradePct = computeGradePercent(
+        (float)($taken['Score'] ?? 0),
+        (int)($taken['question_count'] ?? 0)
+    );
+
+    $student['percentage_sum'] += $rawPct;
+    $student['grade_sum'] = ($student['grade_sum'] ?? 0) + $gradePct;
+
+    $passedOnGradeScale = $gradePct >= computeGradePassingThreshold((float)($taken['Passing_Score'] ?? 50));
+    if ($passedOnGradeScale) {
         $student['passed_count']++;
     } else {
         $student['failed_count']++;

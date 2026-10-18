@@ -1,6 +1,4 @@
 <?php
-/**
- * Redirect to main login page
- */
+// Redirect to main login page
 header('Location: ../../login.php');
 exit;

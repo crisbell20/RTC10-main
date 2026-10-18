@@ -1,12 +1,11 @@
 <?php
-/**
- * Audit logs API — list, recent, export metadata, retention purge (Admin).
- */
+
+// Audit logs API
 
 header('Content-Type: application/json');
 session_start();
 
-if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Admin', 'CCMD'])) {
+if (!isset($_SESSION['user_id']) || ($_SESSION['user_role'] ?? '') !== 'Admin') {
     http_response_code(403);
     echo json_encode(['success' => false, 'message' => 'Unauthorized']);
     exit;
@@ -14,10 +13,13 @@ if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Ad
 
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/audit-log-utils.php';
+require_once __DIR__ . '/../includes/system-settings-utils.php';
+require_once __DIR__ . '/../includes/person-name-utils.php';
 
 $userRole = $_SESSION['user_role'] ?? '';
 $requestMethod = $_SERVER['REQUEST_METHOD'];
-$action = $_GET['action'] ?? $_POST['action'] ?? '';
+$input = json_decode(file_get_contents('php://input'), true) ?? [];
+$action = $_GET['action'] ?? $_POST['action'] ?? ($input['action'] ?? '');
 
 function sendJson(array $payload, int $code = 200): void
 {
@@ -29,11 +31,11 @@ function sendJson(array $payload, int $code = 200): void
 function buildAuditListQuery(PDO $pdo, array $filters, bool $extended): array
 {
     $select = $extended
-        ? 'l.Log_ID, l.User_ID, l.Action, l.Module, l.Outcome, l.Status, l.Entity_Type, l.Entity_ID,
+        ? 'l.Log_ID, l.User_ID, l.Action, l.Module, l.Outcome, l.Status,
            l.IP_Address, l.User_Role, l.Timestamp,
-           u.Fullname AS user_name, u.Email AS user_email, r.Role_Name AS role_name'
+           ' . personNameSql('u') . ' AS user_name, u.Email AS user_email, u.Badge_Number AS user_badge_number, r.Role_Name AS role_name'
         : 'l.Log_ID, l.User_ID, l.Action, l.Outcome, l.Timestamp,
-           u.Fullname AS user_name, u.Email AS user_email, r.Role_Name AS role_name';
+           ' . personNameSql('u') . ' AS user_name, u.Email AS user_email, u.Badge_Number AS user_badge_number, r.Role_Name AS role_name';
 
     $sql = "
         SELECT {$select}
@@ -65,7 +67,7 @@ function buildAuditListQuery(PDO $pdo, array $filters, bool $extended): array
         $params[] = strtoupper($filters['status']);
     }
     if (!empty($filters['search'])) {
-        $sql .= ' AND (u.Fullname LIKE ? OR u.Email LIKE ? OR l.Action LIKE ? OR l.Outcome LIKE ?';
+        $sql .= ' AND (' . personNameSql('u') . ' LIKE ? OR u.Email LIKE ? OR l.Action LIKE ? OR l.Outcome LIKE ?';
         if ($extended) {
             $sql .= ' OR l.Module LIKE ?';
         }
@@ -88,8 +90,6 @@ function normalizeAuditRow(array $row, bool $extended): array
     if (!$extended) {
         $row['Module'] = inferAuditModuleFromAction((string)($row['Action'] ?? ''));
         $row['Status'] = str_starts_with((string)($row['Outcome'] ?? ''), '[FAILED]') ? 'FAILED' : 'SUCCESS';
-        $row['Entity_Type'] = null;
-        $row['Entity_ID'] = null;
         $row['IP_Address'] = null;
         $row['User_Role'] = $row['role_name'] ?? null;
     } else {
@@ -98,6 +98,7 @@ function normalizeAuditRow(array $row, bool $extended): array
 
     $row['user_display'] = $row['user_name']
         ?? ($row['User_Role'] ? ($row['User_Role'] . ' (unknown user)') : 'System / Unknown');
+    $row['Outcome'] = formatAuditDetailsForDisplay($row);
 
     return $row;
 }
@@ -110,14 +111,15 @@ try {
     $extended = auditLogExtendedColumnsExist($pdo);
 
     if ($requestMethod === 'GET' && $action === 'meta') {
+        $auditRetentionDays = getAuditLogRetentionDays($pdo);
         sendJson([
             'success' => true,
             'data' => [
                 'modules' => getAuditModuleOptions(),
                 'actions' => getAuditActionOptions(),
                 'extended_schema' => $extended,
-                'retention_days_default' => AUDIT_LOG_RETENTION_DAYS,
-                'retention_years' => 2,
+                'retention_days_default' => $auditRetentionDays,
+                'retention_years' => round($auditRetentionDays / 365, 1),
             ],
         ]);
     }
@@ -197,8 +199,7 @@ try {
     }
 
     if ($requestMethod === 'POST' && $action === 'log_export') {
-        $raw = json_decode(file_get_contents('php://input'), true) ?? [];
-        $rowCount = max(0, (int)($raw['row_count'] ?? $_POST['row_count'] ?? 0));
+        $rowCount = max(0, (int)($input['row_count'] ?? $_POST['row_count'] ?? 0));
         auditFromSession(
             $pdo,
             'SYSTEM',
@@ -216,10 +217,10 @@ try {
             sendJson(['success' => false, 'message' => 'Admin access required'], 403);
         }
 
-        $raw = json_decode(file_get_contents('php://input'), true) ?? [];
+        $defaultDays = getAuditLogRetentionDays($pdo);
         $days = max(
             AUDIT_LOG_RETENTION_DAYS_MIN,
-            min(AUDIT_LOG_RETENTION_DAYS_MAX, (int)($raw['days'] ?? $_POST['days'] ?? AUDIT_LOG_RETENTION_DAYS))
+            min(AUDIT_LOG_RETENTION_DAYS_MAX, (int)($input['days'] ?? $_POST['days'] ?? $defaultDays))
         );
 
         $deleted = purgeAuditLogsOlderThan($pdo, $days);
@@ -243,5 +244,6 @@ try {
 
     sendJson(['success' => false, 'message' => 'Invalid action'], 400);
 } catch (Exception $e) {
-    sendJson(['success' => false, 'message' => 'Error: ' . $e->getMessage()], 500);
+    error_log('audit-logs.php error: ' . $e->getMessage());
+    sendJson(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.'], 500);
 }

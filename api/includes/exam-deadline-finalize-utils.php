@@ -1,7 +1,6 @@
 <?php
-/**
- * Finalize overdue exams: auto-submit in-progress sessions and fail assigned no-shows.
- */
+
+// Finalize overdue exams
 
 require_once __DIR__ . '/validation-utils.php';
 require_once __DIR__ . '/exam-participant-utils.php';
@@ -50,7 +49,7 @@ function fetchExamsDueForFinalization(PDO $pdo, ?int $onlyExamId = null): array 
 }
 
 /**
- * Active examinee user IDs assigned to an exam (batch + optional participant allowlist).
+ * Active examinee user IDs assigned to an exam
  *
  * @return list<int>
  */
@@ -108,9 +107,7 @@ function fetchAssignedExamineeUserIds(PDO $pdo, int $examId): array {
     return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
 }
 
-/**
- * Record a failed attempt for an assigned examinee who never submitted before the deadline.
- */
+// Record a failed attempt for an assigned examinee who never submitted before the deadline.
 function recordMissedDeadlineFailure(PDO $pdo, int $examId, int $userId): void {
     if (userHasCompletedExamAttempt($pdo, $userId, $examId)) {
         return;
@@ -152,13 +149,19 @@ function recordMissedDeadlineFailure(PDO $pdo, int $examId, int $userId): void {
     $stmt = $pdo->prepare('SELECT Deadline FROM tbl_exam WHERE Exam_ID = ?');
     $stmt->execute([$examId]);
     $deadline = $stmt->fetchColumn();
-    $startedAt = $deadline ? date('Y-m-d H:i:s', parseStoredDateTimeTimestamp($deadline) ?: time()) : date('Y-m-d H:i:s');
+    $closedAt = date('Y-m-d H:i:s');
+    if ($deadline) {
+        $deadlineTs = parseStoredDateTimeTimestamp($deadline);
+        if ($deadlineTs) {
+            $closedAt = date('Y-m-d H:i:s', $deadlineTs);
+        }
+    }
 
     $stmt = $pdo->prepare('
         INSERT INTO tbl_exam_session (Exam_ID, User_ID, Time_Started, Time_Ended)
-        VALUES (?, ?, ?, NOW())
+        VALUES (?, ?, ?, ?)
     ');
-    $stmt->execute([$examId, $userId, $startedAt]);
+    $stmt->execute([$examId, $userId, $closedAt, $closedAt]);
     $sessionId = (int)$pdo->lastInsertId();
 
     $stmt = $pdo->prepare('
@@ -237,7 +240,48 @@ function finalizeExamAfterDeadline(PDO $pdo, int $examId): array {
 }
 
 /**
- * Close Published exams past deadline (+ grace) and finalize all overdue attempts.
+ * End all open examinee sessions when an exam is manually closed
+ *
+ * @return array{auto_submitted:int,empty_removed:int,errors:int}
+ */
+function finalizeExamSessionsOnClose(PDO $pdo, int $examId): array {
+    $stats = ['auto_submitted' => 0, 'empty_removed' => 0, 'errors' => 0];
+
+    if ($examId <= 0) {
+        return $stats;
+    }
+
+    $stmt = $pdo->prepare('
+        SELECT Session_ID, Time_Started
+        FROM tbl_exam_session
+        WHERE Exam_ID = ? AND Time_Ended IS NULL
+    ');
+    $stmt->execute([$examId]);
+
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $sessionId = (int)$row['Session_ID'];
+        $started = !empty($row['Time_Started']);
+
+        try {
+            if ($started && countExamSessionAnswers($pdo, $sessionId, $examId) > 0) {
+                completeExamSessionSubmission($pdo, $sessionId);
+                $stats['auto_submitted']++;
+                continue;
+            }
+
+            deleteExamSession($pdo, $sessionId);
+            $stats['empty_removed']++;
+        } catch (Exception $e) {
+            error_log('finalizeExamSessionsOnClose session ' . $sessionId . ': ' . $e->getMessage());
+            $stats['errors']++;
+        }
+    }
+
+    return $stats;
+}
+
+/**
+ * Close Published exams past deadline and finalize all overdue attempts.
  *
  * @return array{exams_closed:int,auto_submitted:int,missed_failed:int,errors:int}
  */
@@ -273,9 +317,6 @@ function finalizeAllOverdueExams(PDO $pdo): array {
     return $totals;
 }
 
-/**
- * Run full overdue finalization at most once per PHP request.
- */
 function runOverdueExamFinalizationOnce(PDO $pdo): void {
     static $done = false;
     if ($done) {

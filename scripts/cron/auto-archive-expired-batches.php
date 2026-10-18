@@ -1,8 +1,10 @@
 <?php
-/**
- * Auto-archive batches whose Date_Ended has been reached.
- * Schedule daily via Windows Task Scheduler or cron.
- */
+// Auto-archive expired batches
+if (php_sapi_name() !== 'cli') {
+    http_response_code(403);
+    die('This script can only be run from the command line.');
+}
+
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 

@@ -13,12 +13,15 @@ $userName = $_SESSION['user_name'] ?? 'User';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Exams - CCMD</title>
+    <?php require __DIR__ . '/../includes/sidebar-state-early.php'; ?>
+    <title>View Exams - CCMD</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="../../assets/css/dashboard.css">
+    <link rel="stylesheet" href="../../assets/css/dashboard.css?v=1">
+    <link rel="stylesheet" href="../../assets/css/staff-responsive.css?v=3">
     <link rel="stylesheet" href="../../assets/css/ccmd.css">
-    <link rel="stylesheet" href="../../assets/css/exam-question-editor.css">
+    <link rel="stylesheet" href="../../assets/css/exam-question-editor.css?v=2">
+    <link rel="stylesheet" href="../../assets/css/question-display.css?v=2">
     <style>
         .course-card {
             border: 1px solid #dee2e6;
@@ -27,14 +30,22 @@ $userName = $_SESSION['user_name'] ?? 'User';
             margin-bottom: 1rem;
             background: white;
         }
+        .exam-question-count {
+            font-size: 0.9rem;
+            color: #4b5563;
+            white-space: nowrap;
+        }
+        .exam-question-count strong {
+            color: #111827;
+        }
     </style>
 </head>
 <body>
     <div class="top-nav">
-        <div class="nav-brand">
-            <h5>PNP Regional Training Center X</h5>
-            <p>CCMD - Exam Management</p>
-        </div>
+        <?php
+        $navBrandSubtitle = 'CCMD - View Exams';
+        require __DIR__ . '/../includes/nav-brand.php';
+        ?>
         <div class="nav-user">
             <span><?= htmlspecialchars($userName) ?></span>
             <button class="btn-logout" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
@@ -44,21 +55,26 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <div class="dashboard-container">
         <div class="sidebar">
             <ul class="sidebar-menu">
+                <li><a href="profile.php"><i class="bi bi-person-circle"></i>Profile</a></li>
                 <li><a href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
                 <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
-                <li><a href="monitor-examination.php"><i class="bi bi-activity"></i>Monitor Examination</a></li>
-                <li><a href="exams.php" class="active"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
-                <li><a href="monitor-examination.php"><i class="bi bi-people-fill"></i>Enrolled Trainees</a></li>
+                <li><a href="monitor-examination.php"><i class="bi bi-activity"></i>Monitor Examinations</a></li>
+                <li><a href="exams.php" class="active"><i class="bi bi-journal-text"></i>View Exams</a></li>
+                <li><a href="enrolled-trainees.php"><i class="bi bi-people-fill"></i>View Trainees</a></li>
                 <li><a href="reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
-                <li><a href=""><i class="bi bi-clock-history"></i>Audit Logs</a></li>
             </ul>
         </div>
 
         <div class="main-content">
             <div class="page-header">
-                <div>
-                    <h2 id="examPageTitle">Manage Exams</h2>
-                    <p id="examPageSubtitle" class="text-muted mb-0">Review exams created by administrators. You can edit questions, view participants, and view results.</p>
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div>
+                        <h2 id="examPageTitle">View Exams</h2>
+                        <p id="examPageSubtitle" class="text-muted mb-0" style="display: none;"></p>
+                    </div>
+                    <button class="btn btn-add-user" id="addExamBtn" data-bs-toggle="modal" data-bs-target="#examModal">
+                        <i class="bi bi-plus-lg me-2"></i>Add New Exam
+                    </button>
                 </div>
             </div>
 
@@ -101,6 +117,118 @@ $userName = $_SESSION['user_name'] ?? 'User';
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add/Edit Exam Modal -->
+    <div class="modal fade" id="examModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="examModalLabel">Add New Exam</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form id="examForm">
+                    <input type="hidden" id="examId" name="exam_id">
+                    <div class="modal-body">
+                        <div id="examFormAlert"></div>
+                        <div class="mb-3">
+                            <label class="form-label">Course *</label>
+                            <select id="examCourse" class="form-select" required></select>
+                        </div>
+                        <div class="mb-3" id="examModuleWrap">
+                            <label class="form-label">Module *</label>
+                            <select id="examModule" class="form-select" required disabled>
+                                <option value="">Select module...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Subject *</label>
+                            <select id="examSubject" class="form-select" required disabled>
+                                <option value="">Select subject...</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Title *</label>
+                            <input type="text" class="form-control" id="examTitle" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Description</label>
+                            <textarea class="form-control" id="examDescription" rows="3"></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Schedule Date/Time</label>
+                            <input type="datetime-local" class="form-control" id="examSchedule" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Deadline <span class="text-danger">*</span></label>
+                            <input type="datetime-local" class="form-control" id="examDeadline" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Duration (minutes) <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" id="examDuration" min="1" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Passing Score (%) <span class="text-danger">*</span></label>
+                            <input type="number" class="form-control" id="examPassing" min="0" max="100" step="0.01" inputmode="decimal" pattern="[0-9]+([.][0-9]+)?" required>
+                        </div>
+                        <div class="mb-3" id="examQuestionsSection" data-validate-group="1">
+                            <label class="form-label">Exam Questions</label>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span id="questionCount" class="badge bg-info">0 questions assigned</span>
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="manageQuestionsBtn">
+                                    <i class="bi bi-list-check"></i> Manage Questions
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="examRandomized">
+                            <label class="form-check-label" for="examRandomized">Randomize questions</label>
+                        </div>
+                        <div class="mb-3" id="examAssignmentsSection" data-validate-group="1">
+                            <label class="form-label">Assign Exam *</label>
+                            <div class="row g-2">
+                                <div class="col-md-6">
+                                    <label class="form-label small mb-1" for="assignExamBatchSelect">Batch</label>
+                                    <select id="assignExamBatchSelect" class="form-select form-select-sm" disabled>
+                                        <option value="">Select exam course first</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label small mb-1" for="assignExamSectionSelect">Section</label>
+                                    <select id="assignExamSectionSelect" class="form-select form-select-sm" disabled>
+                                        <option value="">Select a batch first</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div id="examAssignmentList" class="border rounded p-2 mt-2" style="max-height: 150px; overflow-y: auto;">
+                                <p class="text-muted text-center small mb-0 py-2" id="examAssignmentEmpty">No sections assigned</p>
+                            </div>
+                            <small class="text-muted d-block mt-2">
+                                <span id="batchCount">0</span> section(s) assigned.
+                            </small>
+                            <div class="d-flex justify-content-between align-items-center mt-2 gap-2 flex-wrap" id="examParticipantsSection" data-validate-group="1">
+                                <small class="text-muted" id="examParticipantSummary">Participants: assign sections first</small>
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="manageParticipantsFromEditBtn" disabled>
+                                    <i class="bi bi-people"></i> Manage Participants
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Status</label>
+                            <select id="examStatus" class="form-select">
+                                <option value="Draft">Draft</option>
+                                <option value="Published">Published</option>
+                                <option value="Closed">Closed</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" id="examSubmitBtn" class="btn btn-add-user">Add Exam</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -175,31 +303,23 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 </div>
                 <div class="modal-body">
                     <p class="text-muted small mb-3" id="examImportSubjectNote">Questions are added to this exam as drafts until the exam is published.</p>
-                    <div class="d-flex flex-wrap gap-2 mb-3">
-                        <button type="button" class="btn btn-sm btn-outline" id="downloadExamImportTemplateBtn">
-                            <i class="bi bi-download me-2"></i>Download Template
-                        </button>
-                    </div>
                     <div class="alert alert-secondary small mb-3">
-                        Use the <strong>Questions</strong> sheet with columns:
+                        The <strong>Questions</strong> sheet includes Course, Module, and Subject at the top, then columns:
                         <code>Question</code>, <code>Option_A</code>–<code>Option_D</code>, <code>Option_E</code>, <code>Correct_Answer</code>.
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="examImportFile">Select File</label>
-                        <input type="file" class="form-control" id="examImportFile" accept=".xlsx,.xls,.csv">
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                            <div class="flex-grow-1" style="min-width: 220px;">
+                                <input type="file" class="form-control" id="examImportFile" accept=".xlsx,.xls,.csv">
+                            </div>
+                            <button type="button" class="btn btn-outline text-nowrap" id="downloadExamImportTemplateBtn">
+                                <i class="bi bi-download me-1"></i>Download Template
+                            </button>
+                        </div>
                         <small class="text-muted">Supported formats: Excel (.xlsx, .xls) or CSV (.csv)</small>
                     </div>
                     <div id="examImportValidation" class="mt-3" style="display: none;"></div>
-                    <div id="examImportPreview" class="mt-3" style="display: none;">
-                        <h6 class="mb-2">Preview</h6>
-                        <div id="examImportPreviewCards" class="d-none"></div>
-                        <div class="table-responsive" id="examImportPreviewTableWrap">
-                            <table class="table table-sm table-bordered" id="examImportPreviewTable">
-                                <thead></thead>
-                                <tbody></tbody>
-                            </table>
-                        </div>
-                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline" data-bs-dismiss="modal">Cancel</button>
@@ -211,14 +331,14 @@ $userName = $_SESSION['user_name'] ?? 'User';
         </div>
     </div>
 
-    <!-- View Participants Modal -->
+    <!-- Manage Participants Modal -->
     <div class="modal fade" id="participantsModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog modal-lg modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
                     <div>
-                        <h5 class="modal-title" id="participantsModalTitle">View Participants</h5>
-                        <small class="text-muted" id="participantsModalSubtitle">Participants selected for this exam</small>
+                        <h5 class="modal-title" id="participantsModalTitle">Manage Participants</h5>
+                        <small class="text-muted" id="participantsModalSubtitle">Select who can access this exam</small>
                     </div>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
@@ -239,13 +359,13 @@ $userName = $_SESSION['user_name'] ?? 'User';
                         </div>
                         <div id="participantsList"></div>
                         <div id="participantsEmpty" class="text-center text-muted py-4" style="display:none;">
-                            No participants are selected for this exam.
+                            No trainees found in the assigned sections. Assign sections first, then manage participants.
                         </div>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-outline" data-bs-dismiss="modal">Close</button>
-                    <button type="button" class="btn btn-add-user d-none" id="saveParticipantsBtn" disabled>Save Participants</button>
+                    <button type="button" class="btn btn-outline" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-add-user" id="saveParticipantsBtn" disabled>Save Participants</button>
                 </div>
             </div>
         </div>
@@ -256,25 +376,26 @@ $userName = $_SESSION['user_name'] ?? 'User';
             role: 'CCMD',
             canCreateExam: false,
             canEditExamDetails: false,
-            canEditQuestions: true,
+            canEditQuestions: false,
             canManageParticipants: false,
             canViewParticipants: true,
             canViewResults: true,
             responsesPath: '../masterfiles/exam-responses.php',
-            pageTitle: 'Manage Exams',
-            pageSubtitle: 'Review exams created by administrators. You can edit questions, view participants, and view results.',
+            pageTitle: 'View Exams',
+            pageSubtitle: '',
             participantsModalTitle: 'View Participants',
-            participantsModalSubtitle: 'Participants selected for this exam'
+            participantsModalSubtitle: 'Trainees assigned to this exam'
         };
     </script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/logout-handler.js?v=1"></script>
-    <script src="../../assets/js/auto-logout.js"></script>
+    <script src="../../assets/js/auto-logout.js?v=2"></script>
     <script src="../../js/masterfiles/drag-autoscroll.js?v=1"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="../../js/masterfiles/question-import.js?v=2"></script>
-    <script src="../../js/masterfiles/exams.js?v=48"></script>
+    <script src="../../js/masterfiles/question-import.js?v=5"></script>
+    <script src="../../assets/js/modal-form-validation.js?v=1"></script>
+    <script src="../../js/masterfiles/exams.js?v=73"></script>
 </body>
 </html>

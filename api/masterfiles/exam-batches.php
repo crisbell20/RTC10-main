@@ -1,4 +1,7 @@
 <?php
+
+// Exam batches API
+
 header('Content-Type: application/json');
 session_start();
 
@@ -18,6 +21,13 @@ $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
 $input = json_decode($rawInput, true) ?? [];
 $action = $_GET['action'] ?? ($input['action'] ?? '');
+$userRole = $_SESSION['user_role'] ?? '';
+
+if ($request_method === 'POST' && $userRole !== 'Admin') {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'message' => 'Forbidden: Admin access required']);
+    exit;
+}
 
 // Debug logging
 error_log("exam-batches.php - Method: $request_method, Action: $action, Input: " . json_encode($input));
@@ -120,19 +130,62 @@ try {
                 SELECT 
                     eb.Exam_Batch_ID,
                     eb.Batch_ID,
+                    COALESCE(pb.Batch_ID, b.Batch_ID) AS Parent_Batch_ID,
                     COALESCE(pb.Batch_Name, b.Batch_Name) AS Batch_Name,
-                    COALESCE(s.Section_ID, b.Section_ID) AS Section_ID,
-                    COALESCE(s.Section_Name, b.Batch_Name) AS Section_Name,
-                    c.Course_Name,
-                    c.Course_ID
+                    s.Section_ID,
+                    s.Section_Name,
+                    COALESCE(c.Course_Name, \'\') AS Course_Name,
+                    COALESCE(pb.Course_ID, b.Course_ID) AS Course_ID
                 FROM tbl_exam_batch eb
                 INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
-                LEFT JOIN tbl_academic_section s ON b.Section_ID = s.Section_ID
+                INNER JOIN tbl_academic_section s ON s.Section_ID = b.Section_ID
                 LEFT JOIN tbl_batch pb ON s.Batch_ID = pb.Batch_ID
-                INNER JOIN tbl_course c ON b.Course_ID = c.Course_ID
+                LEFT JOIN tbl_course c ON c.Course_ID = COALESCE(pb.Course_ID, b.Course_ID)
                 WHERE eb.Exam_ID = ?
-                ORDER BY c.Course_Name, Batch_Name, s.Section_Name
+                  AND b.Section_ID IS NOT NULL
+                  AND b.Section_ID <> 0
+
+                UNION ALL
+
+                SELECT
+                    eb.Exam_Batch_ID,
+                    eb.Batch_ID,
+                    b.Batch_ID AS Parent_Batch_ID,
+                    b.Batch_Name AS Batch_Name,
+                    s.Section_ID,
+                    s.Section_Name,
+                    COALESCE(c.Course_Name, \'\') AS Course_Name,
+                    b.Course_ID AS Course_ID
+                FROM tbl_exam_batch eb
+                INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
+                INNER JOIN tbl_academic_section s ON s.Batch_ID = b.Batch_ID
+                LEFT JOIN tbl_course c ON c.Course_ID = b.Course_ID
+                WHERE eb.Exam_ID = ?
+                  AND (b.Section_ID IS NULL OR b.Section_ID = 0)
+
+                ORDER BY Batch_Name, Section_Name
             ');
+            $stmt->execute([$exam_id, $exam_id]);
+            $batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Dedupe parent-batch + section (same Alpha under different parents stays).
+            $seen = [];
+            $deduped = [];
+            foreach ($batches as $row) {
+                $key = ((int)($row['Parent_Batch_ID'] ?? 0)) . ':' . ((int)($row['Section_ID'] ?? 0));
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+                // Ensure display uses parent batch name, not "... Enrollment".
+                $batchName = trim((string)($row['Batch_Name'] ?? ''));
+                if (preg_match('/\s+Enrollment$/i', $batchName)) {
+                    $batchName = trim(preg_replace('/\s+Enrollment$/i', '', $batchName));
+                }
+                $row['Batch_Name'] = $batchName;
+                $deduped[] = $row;
+            }
+            $batches = $deduped;
         } else {
             // Old schema with Course_ID
             $stmt = $pdo->prepare('
@@ -147,10 +200,9 @@ try {
                 WHERE eb.Exam_ID = ?
                 ORDER BY c.Course_Name, b.Batch_Name
             ');
+            $stmt->execute([$exam_id]);
+            $batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
         }
-        
-        $stmt->execute([$exam_id]);
-        $batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'data' => $batches]);
@@ -206,7 +258,8 @@ try {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
+    error_log('exam-batches.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }
 ?>

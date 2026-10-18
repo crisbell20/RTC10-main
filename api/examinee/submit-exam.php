@@ -1,13 +1,13 @@
 <?php
-/**
- * Submit Exam API
- * Ends the exam session and calculates the final score
- */
+
+// Examinee Submit Exam API
+// Ends the exam session and calculates the final score
 
 header('Content-Type: application/json');
 session_start();
 
 require_once '../config/connection-pdo.php';
+/** @var PDO $pdo */
 require_once '../includes/exam-code-utils.php';
 require_once '../includes/exam-session-utils.php';
 require_once '../includes/validation-utils.php';
@@ -40,10 +40,26 @@ if (!$session_id) {
 try {
     $pdo->beginTransaction();
 
-    $context = loadActiveExamSessionContext($pdo, (int)$session_id, (int)$userId);
+    $context = loadExamSessionForSubmit($pdo, (int)$session_id, (int)$userId);
     if (empty($context['valid'])) {
         $pdo->rollBack();
         sendError($context['message'] ?? 'Invalid session', $context['status'] ?? 400);
+    }
+
+    if ((int)($context['session']['Cheating_Locked'] ?? 0) === 1) {
+    $pdo->rollBack();
+    sendError(
+        'This exam is locked due to recorded violations. Please contact the administrator.',
+        403
+    );
+}
+
+    if (empty($context['session']['Time_Ended'])) {
+        $occupancyToken = normalizeExamOccupancyToken($input['occupancy_token'] ?? '');
+        if ($occupancyToken === '' || !examSessionOccupancyAllows($pdo, (int)$session_id, $occupancyToken)) {
+            $pdo->rollBack();
+            sendError(examOccupancyConflictMessage(), 409);
+        }
     }
 
     $session = $context['session'];

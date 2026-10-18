@@ -1,6 +1,4 @@
-/**
- * Auto-scroll a container while dragging near its top or bottom edge.
- */
+// Drag auto-scroll
 (function(global) {
     let rafId = null;
     let scrollContainer = null;

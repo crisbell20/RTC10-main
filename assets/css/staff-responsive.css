@@ -1,0 +1,329 @@
+/* Staff portal — mobile responsive styles */
+
+@media (max-width: 768px) {
+    body:not(.examinee-portal):not(.examinee-exam) {
+        overflow-x: hidden;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .top-nav {
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.75rem 1rem;
+        padding-top: max(0.75rem, env(safe-area-inset-top));
+        padding-left: max(0.75rem, env(safe-area-inset-left));
+        padding-right: max(1rem, env(safe-area-inset-right));
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-brand {
+        flex: 1;
+        min-width: 0;
+        gap: 0.5rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-brand-logo {
+        width: 30px;
+        height: 30px;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-brand h5 {
+        font-size: 0.95rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-brand p {
+        display: none;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-user span {
+        display: none;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .main-content {
+        padding: 1rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .page-header {
+        margin-bottom: 1rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .page-header h2 {
+        font-size: 1.35rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .page-header p.text-muted {
+        font-size: 0.85rem;
+        margin-bottom: 0;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .stat-card {
+        padding: 0.65rem 0.75rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .stat-header {
+        margin-bottom: 0.35rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .stat-icon {
+        width: 28px;
+        height: 28px;
+        font-size: 0.95rem;
+        border-radius: 0.375rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .stat-label {
+        font-size: 0.65rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .stat-value {
+        font-size: 1.2rem;
+        margin-bottom: 0.1rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .stat-footer {
+        font-size: 0.7rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .section-card {
+        margin-bottom: 1rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .section-header {
+        flex-wrap: wrap;
+        padding: 1rem;
+        gap: 0.5rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .section-header h5 {
+        font-size: 1rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .section-body {
+        padding: 0.75rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .main-content .table {
+        font-size: 0.8125rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .main-content .table th,
+    body:not(.examinee-portal):not(.examinee-exam) .main-content .table td {
+        padding: 0.5rem 0.4rem;
+        vertical-align: middle;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .table-responsive {
+        -webkit-overflow-scrolling: touch;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .card {
+        margin-bottom: 0.75rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .card-body {
+        padding: 0.85rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .btn,
+    body:not(.examinee-portal):not(.examinee-exam) .btn-logout {
+        min-height: 44px;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .btn-sm {
+        min-height: 36px;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .form-control,
+    body:not(.examinee-portal):not(.examinee-exam) .form-select {
+        font-size: 16px;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-tabs {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-tabs .nav-link {
+        white-space: nowrap;
+        font-size: 0.875rem;
+        padding: 0.5rem 0.75rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .modal-dialog {
+        margin: 0.75rem;
+    }
+}
+
+@media (max-width: 575.98px) {
+    body:not(.examinee-portal):not(.examinee-exam) .main-content {
+        padding: 0.75rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .stat-value {
+        font-size: 1.1rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .page-header h2 {
+        font-size: 1.2rem;
+    }
+}
+
+@media (min-width: 769px) {
+    body:not(.examinee-portal):not(.examinee-exam) .top-nav {
+        align-items: center;
+        gap: 0.75rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-brand {
+        flex: 1;
+        min-width: 0;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .nav-user {
+        margin-left: auto;
+        flex-shrink: 0;
+    }
+}
+
+/* ── Shared staff action menus, card rows, compact buttons (mobile) ── */
+
+.staff-label-short {
+    display: none;
+}
+
+.staff-card-header,
+.course-card > .d-flex:first-child,
+.section-item > .d-flex:first-child,
+.batch-item > .d-flex:first-child,
+.question-card-header {
+    gap: 0.5rem;
+}
+
+.staff-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+}
+
+.staff-action-menu .staff-action-toggle,
+.main-content .dropdown .staff-action-toggle {
+    min-height: auto;
+    line-height: 1;
+    padding: 0.2rem 0.35rem;
+}
+
+.staff-action-menu .staff-action-toggle .bi-three-dots-vertical,
+.main-content .dropdown .staff-action-toggle .bi-three-dots-vertical {
+    font-size: 1.2rem;
+}
+
+body:not(.examinee-portal):not(.examinee-exam) .main-content .dropdown-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    min-height: 42px;
+    padding: 0.45rem 1rem;
+    font-size: 0.875rem;
+}
+
+@media (max-width: 768px) {
+    body:not(.examinee-portal):not(.examinee-exam) .page-header > .d-flex,
+    body:not(.examinee-portal):not(.examinee-exam) .page-header .qb-header-row {
+        flex-direction: row;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .page-header h2 {
+        flex: 1;
+        min-width: 0;
+        font-size: 1.15rem;
+        margin-bottom: 0;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .page-header .d-flex.gap-2,
+    body:not(.examinee-portal):not(.examinee-exam) .page-header .qb-header-actions,
+    body:not(.examinee-portal):not(.examinee-exam) .page-header .staff-header-actions {
+        flex-shrink: 0;
+        flex-wrap: nowrap;
+        gap: 0.4rem;
+        width: auto;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .page-header .btn:not(.btn-link):not(.staff-action-toggle) {
+        min-height: 36px !important;
+        font-size: 0.75rem;
+        padding: 0.35rem 0.55rem;
+        white-space: nowrap;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .page-header .btn:not(.btn-link) .bi {
+        margin-right: 0.25rem !important;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .staff-label-long {
+        display: none;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .staff-label-short {
+        display: inline;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .course-card,
+    body:not(.examinee-portal):not(.examinee-exam) .section-item,
+    body:not(.examinee-portal):not(.examinee-exam) .batch-item {
+        padding: 0.75rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .course-card > .d-flex:first-child,
+    body:not(.examinee-portal):not(.examinee-exam) .section-item > .d-flex:first-child,
+    body:not(.examinee-portal):not(.examinee-exam) .batch-item > .d-flex:first-child,
+    body:not(.examinee-portal):not(.examinee-exam) .course-card > .staff-card-header,
+    body:not(.examinee-portal):not(.examinee-exam) .question-card-header {
+        align-items: center !important;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .course-card > .d-flex:first-child > div:first-child,
+    body:not(.examinee-portal):not(.examinee-exam) .section-item > .d-flex:first-child > div:first-child,
+    body:not(.examinee-portal):not(.examinee-exam) .batch-item > .d-flex:first-child > div:first-child,
+    body:not(.examinee-portal):not(.examinee-exam) .staff-card-title {
+        flex: 1;
+        min-width: 0;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .course-card h5 {
+        font-size: 1rem;
+        margin-bottom: 0.15rem;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .staff-row-actions .btn-sm,
+    body:not(.examinee-portal):not(.examinee-exam) .staff-inline-action {
+        font-size: 0.7rem;
+        padding: 0.25rem 0.45rem;
+        min-height: 32px !important;
+        white-space: nowrap;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .course-card[data-exam-id] > .d-flex:first-child {
+        align-items: flex-start !important;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .course-card[data-exam-id] .staff-action-menu {
+        align-self: center;
+    }
+
+    body:not(.examinee-portal):not(.examinee-exam) .main-content .table .dropdown > .btn,
+    body:not(.examinee-portal):not(.examinee-exam) .main-content .table .staff-action-toggle {
+        min-height: auto !important;
+        padding: 0.2rem 0.35rem;
+    }
+}

@@ -1,8 +1,6 @@
 <?php
-/**
- * Examinee Profile API
- * Read-only profile data for the logged-in trainee (own record only).
- */
+
+// Examinee Profile API
 
 header('Content-Type: application/json');
 session_start();
@@ -10,6 +8,8 @@ session_start();
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/exam-code-utils.php';
 require_once __DIR__ . '/../includes/audit-log-utils.php';
+require_once __DIR__ . '/../includes/user-identity-utils.php';
+require_once __DIR__ . '/../includes/person-name-utils.php';
 
 function sendSuccess($data) {
     http_response_code(200);
@@ -28,7 +28,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'Examinee') {
-    sendError('Access denied. This resource is only available to examinees.', 403);
+        sendError('Access denied. This resource is only available to trainees.', 403);
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET' && $_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -53,14 +53,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             sendError('That email address is already in use', 409);
         }
 
-        $nameStmt = $pdo->prepare('SELECT Fullname FROM tbl_user WHERE User_ID = ? LIMIT 1');
-        $nameStmt->execute([$userId]);
-        $fullName = (string)($nameStmt->fetchColumn() ?: 'Trainee');
-
         $update = $pdo->prepare('UPDATE tbl_user SET Email = ? WHERE User_ID = ?');
         $update->execute([$email, $userId]);
 
-        auditFromSession($pdo, 'USER', 'UPDATE_PROFILE', "{$fullName} updated email", 'SUCCESS', 'user', $userId);
+        auditFromSession($pdo, 'USER', 'UPDATE_PROFILE', 'Updated email', 'SUCCESS', 'user', $userId);
 
         sendSuccess(['email' => $email, 'message' => 'Email updated successfully']);
     } catch (PDOException $e) {
@@ -75,9 +71,12 @@ try {
     $userStmt = $pdo->prepare("
         SELECT
             u.User_ID,
-            u.Fullname,
+            " . personNameSql('u') . " AS Fullname,
+            u.Firstname,
+            u.Middlename,
+            u.Lastname,
             u.Email,
-            u.Academic_Number,
+            u.Badge_Number,
             {$rankCol}
             u.Status,
             u.Must_Change_Password,
@@ -97,6 +96,7 @@ try {
 
     unset($user['User_ID']);
 
+    $user['Email'] = displayUserEmail($user['Email'] ?? null);
     $user['Must_Change_Password'] = (int)($user['Must_Change_Password'] ?? 0);
     if ($user['Date_Created']) {
         $user['Date_Created'] = date('Y-m-d H:i:s', strtotime($user['Date_Created']));

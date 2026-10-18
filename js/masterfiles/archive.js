@@ -80,7 +80,6 @@ function bindEvents() {
         searchTimer = setTimeout(loadArchivedItems, 350);
     });
     document.getElementById('clearFiltersBtn')?.addEventListener('click', clearFilters);
-    document.getElementById('exportArchiveBtn')?.addEventListener('click', exportCsv);
     document.getElementById('archiveTableBody')?.addEventListener('click', onTableAction);
 }
 
@@ -111,11 +110,18 @@ function renderTableHead() {
     }).join('')}</tr>`;
 }
 
+function bootstrapAlertClass(type) {
+    if (type === 'error' || type === 'danger') return 'danger';
+    if (type === 'warning') return 'warning';
+    if (type === 'info') return 'info';
+    return 'success';
+}
+
 function showAlert(message, type = 'success') {
     const alertDiv = document.getElementById('messageAlert');
     if (!alertDiv) return;
-    alertDiv.innerHTML = `<div class="alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show">
-        ${message}
+    alertDiv.innerHTML = `<div class="alert alert-${bootstrapAlertClass(type)} alert-dismissible fade show">
+        ${escapeHtml(message)}
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>`;
 }
@@ -128,8 +134,20 @@ async function loadSummary() {
         archiveEnabled = res.data.archive_enabled !== false;
         retentionDays = res.data.retention_days || 730;
 
-        const retentionLabel = document.getElementById('retentionDaysLabel');
-        if (retentionLabel) retentionLabel.textContent = retentionDays;
+        const dateRange = document.getElementById('filterDateRange');
+        if (dateRange) {
+            const value = String(retentionDays);
+            let option = dateRange.querySelector(`option[value="${value}"]`);
+            if (!option) {
+                option = document.createElement('option');
+                option.value = value;
+                dateRange.appendChild(option);
+            }
+            const label = retentionDays >= 365 && retentionDays % 365 === 0
+                ? (retentionDays / 365 === 1 ? '1 year' : `${retentionDays / 365} years`)
+                : `${retentionDays} days`;
+            option.textContent = `Last ${label}`;
+        }
 
         const warning = document.getElementById('migrationWarning');
         if (!archiveEnabled && warning) warning.classList.remove('d-none');
@@ -247,7 +265,6 @@ function listActionForType(type) {
 async function loadArchivedItems() {
     const tbody = document.getElementById('archiveTableBody');
     const summary = document.getElementById('archiveSummary');
-    const exportBtn = document.getElementById('exportArchiveBtn');
     const colspan = TABLE_CONFIG[currentType]?.colspan || 6;
 
     updateClearFiltersBtn();
@@ -277,7 +294,6 @@ async function loadArchivedItems() {
             const label = archivedItems.length === 1 ? currentType.slice(0, -1) : currentType;
             summary.textContent = `Showing ${archivedItems.length} archived ${label}`;
         }
-        if (exportBtn) exportBtn.disabled = archivedItems.length === 0;
     } catch (err) {
         tbody.innerHTML = `<tr><td colspan="${colspan}" class="text-center text-danger py-4">Failed to load archived ${currentType}</td></tr>`;
         showAlert(err.response?.data?.message || `Error loading archived ${currentType}`, 'error');
@@ -324,10 +340,6 @@ function renderRestoreButton(id, title) {
 function renderExamRow(exam) {
     const retentionHtml = renderRetentionCell(exam);
     const statusBadge = badgeForStatus(exam.Status);
-    const extraActions = exam.Exam_Code
-        ? `<button type="button" class="btn btn-sm btn-outline-secondary" data-archive-action="copy-code" data-exam-code="${escapeHtml(exam.Exam_Code)}" title="Copy code"><i class="bi bi-clipboard"></i></button>`
-        : '';
-    const responsesBtn = `<button type="button" class="btn btn-sm btn-outline-primary" data-archive-action="responses" data-item-id="${exam.Exam_ID}" title="View responses"><i class="bi bi-bar-chart-line"></i></button>`;
 
     return `<tr>
         <td><div class="archive-exam-title">${escapeHtml(exam.Title)}</div></td>
@@ -335,7 +347,7 @@ function renderExamRow(exam) {
         <td><span class="badge archive-status-badge ${statusBadge}">${escapeHtml(exam.Status)}</span></td>
         <td>${formatDateTime(exam.Archived_At)}</td>
         <td>${retentionHtml}</td>
-        <td class="text-end"><div class="archive-actions d-flex justify-content-end gap-1">${renderRestoreButton(exam.Exam_ID, exam.Title)}${responsesBtn}${extraActions}</div></td>
+        <td class="text-end"><div class="archive-actions d-flex justify-content-end gap-1">${renderRestoreButton(exam.Exam_ID, exam.Title)}</div></td>
     </tr>`;
 }
 
@@ -370,10 +382,8 @@ function renderSubjectRow(subject) {
     const moduleLine = subject.Module_Name
         ? `<span class="d-block">${escapeHtml(subject.Module_Name)}</span><small class="text-muted">${escapeHtml(subject.Course_Name || '')}</small>`
         : `<span class="d-block">${escapeHtml(subject.Course_Name || '—')}</span>`;
-    const codeNote = subject.Subject_Code ? `<small class="d-block text-muted">${escapeHtml(subject.Subject_Code)}</small>` : '';
-
     return `<tr>
-        <td><strong>${escapeHtml(subject.Subject_Name)}</strong>${codeNote}</td>
+        <td><strong>${escapeHtml(subject.Subject_Name)}</strong></td>
         <td>${moduleLine}</td>
         <td class="text-center"><span class="badge ${usageParts.length ? 'bg-warning text-dark' : 'bg-light text-muted border'}">${escapeHtml(usageLabel)}</span></td>
         <td>${formatDateTime(subject.Archived_At)}</td>
@@ -429,7 +439,7 @@ function renderUserRow(user) {
     return `<tr>
         <td>
             <strong>${escapeHtml(user.Fullname)}</strong>
-            <small class="d-block text-muted">${escapeHtml(user.Email || user.Academic_Number || '')}</small>
+            <small class="d-block text-muted">${escapeHtml((user.Email && !String(user.Email).toLowerCase().endsWith('@rtc.examinee.local') ? user.Email : '') || user.Badge_Number || '')}</small>
         </td>
         <td><span class="badge bg-secondary">${escapeHtml(user.Role_Name || '—')}</span></td>
         <td>${formatDateTime(user.Archived_At)}</td>
@@ -441,11 +451,6 @@ function renderUserRow(user) {
 function renderRetentionCell(item) {
     const status = item.Retention_Status;
 
-    if (status === 'protected') {
-        return `<span class="badge archive-retention-badge archive-retention-badge--protected">
-            <i class="bi bi-shield-check me-1"></i>Protected
-        </span><small class="d-block text-muted mt-1">Has linked data</small>`;
-    }
     if (status === 'unknown') return '<span class="text-muted">—</span>';
     if (status === 'eligible') {
         const overdue = parseInt(item.Days_Overdue, 10) || 0;
@@ -475,12 +480,6 @@ function onTableAction(e) {
         case 'restore':
             restoreItem(itemId);
             break;
-        case 'responses':
-            if (currentType === 'exams') window.location.href = `exam-responses.php?exam_id=${itemId}`;
-            break;
-        case 'copy-code':
-            copyExamCode(btn.dataset.examCode);
-            break;
     }
 }
 
@@ -489,30 +488,53 @@ async function restoreItem(itemId) {
     const label = item ? getItemLabel(item) : 'this record';
     const endpoint = RESTORE_ENDPOINTS[currentType];
 
-    let restoreHint = '';
-    if (currentType === 'subjects') {
-        restoreHint = '<br><br><small class="text-muted">The parent module and course will also be restored if archived. Other subjects in the same module stay archived.</small>';
-    } else if (currentType === 'sections') {
-        restoreHint = '<br><br><small class="text-muted">The parent batch and course will also be restored if archived. Other sections in the same batch stay archived.</small>';
-    } else if (currentType === 'modules') {
-        restoreHint = '<br><br><small class="text-muted">The parent course will also be restored if archived. Subjects in this module stay archived until restored individually.</small>';
-    } else if (currentType === 'batches') {
-        restoreHint = '<br><br><small class="text-muted">The parent course will also be restored if archived. Sections in this batch stay archived until restored individually.</small>';
-    }
+    const overdueBatch = currentType === 'batches' && isBatchEndDatePast(item?.Date_Ended);
+    const tomorrow = nextCalendarDateIso();
 
-    const result = await Swal.fire({
-        title: 'Restore record?',
-        html: `<strong>${escapeHtml(label)}</strong> will return to active management.${restoreHint}`,
+    const swalConfig = {
+        title: overdueBatch ? 'Restore overdue batch?' : 'Restore record?',
         icon: 'question',
         showCancelButton: true,
         confirmButtonText: 'Restore',
         confirmButtonColor: '#198754',
-    });
+    };
+
+    if (overdueBatch) {
+        const endedLabel = formatDateOnly(item.Date_Ended) || item.Date_Ended;
+        swalConfig.html = `<strong>${escapeHtml(label)}</strong> ended on <strong>${escapeHtml(endedLabel)}</strong>.`
+            + `<br><br>Enter a <strong>new end date after today</strong>.`
+            + `<br><br><label class="form-label text-start d-block">New end date</label>`
+            + `<input type="date" id="swal-batch-end-date" class="swal2-input" style="width:auto;max-width:100%" min="${tomorrow}" value="${tomorrow}">`;
+        swalConfig.preConfirm = () => {
+            const input = document.getElementById('swal-batch-end-date');
+            const value = input ? input.value : '';
+            if (!value) {
+                Swal.showValidationMessage('Please choose a new end date');
+                return false;
+            }
+            if (value <= todayIsoDate()) {
+                Swal.showValidationMessage('End date must be after today');
+                return false;
+            }
+            return value;
+        };
+        swalConfig.didOpen = () => {
+            const input = document.getElementById('swal-batch-end-date');
+            if (input) input.focus();
+        };
+    } else {
+        swalConfig.html = `<strong>${escapeHtml(label)}</strong> will return to active management.`;
+    }
+
+    const result = await Swal.fire(swalConfig);
 
     if (!result.isConfirmed) return;
 
     try {
         const payload = { action: endpoint.action, [endpoint.idKey]: itemId };
+        if (overdueBatch && result.value) {
+            payload.date_ended = result.value;
+        }
         const url = endpoint.query ? `${endpoint.url}?action=${endpoint.action}` : endpoint.url;
         const res = await axios.post(url, payload);
         if (res.data.success) {
@@ -525,6 +547,30 @@ async function restoreItem(itemId) {
     } catch (err) {
         showAlert(err.response?.data?.message || 'Error restoring record', 'error');
     }
+}
+
+function todayIsoDate() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function nextCalendarDateIso() {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function isBatchEndDatePast(dateEnded) {
+    if (!dateEnded) return false;
+    const ended = String(dateEnded).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ended)) return false;
+    return ended <= todayIsoDate();
 }
 
 function getItemId(item) {
@@ -545,45 +591,6 @@ function getItemId(item) {
 function getItemLabel(item) {
     if (!item) return 'this record';
     return item.Title || item.Course_Name || item.Module_Name || item.Subject_Name || item.Batch_Name || item.Section_Name || item.Fullname || item.Question_Text?.substring(0, 60) || 'this record';
-}
-
-function copyExamCode(code) {
-    if (!code) return;
-    navigator.clipboard.writeText(code)
-        .then(() => showAlert(`Exam code <strong>${escapeHtml(code)}</strong> copied`, 'success'))
-        .catch(() => showAlert('Could not copy to clipboard', 'error'));
-}
-
-function exportCsv() {
-    if (!archivedItems.length) return;
-
-    const headers = ['Type', 'Name', 'Archived At', 'Retention', 'Purge Eligible At'];
-    const rows = archivedItems.map(item => [
-        currentType,
-        getItemLabel(item),
-        item.Archived_At || '',
-        retentionLabelForExport(item),
-        item.Purge_Eligible_At || '',
-    ]);
-
-    const csv = [headers, ...rows]
-        .map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
-        .join('\n');
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `archive-${currentType}-${formatLocalDate(new Date())}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-}
-
-function retentionLabelForExport(item) {
-    if (item.Retention_Status === 'protected') return 'Protected';
-    if (item.Retention_Status === 'unknown') return 'Unknown';
-    if (item.Retention_Status === 'eligible') return 'Eligible for purge';
-    return `${item.Days_Until_Purge || 0} days left`;
 }
 
 function badgeForStatus(status) {

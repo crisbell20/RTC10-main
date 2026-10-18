@@ -1,0 +1,245 @@
+/* Question Bank — list cards, filters, mobile layout */
+
+.question-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    background: #fff;
+}
+
+.question-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 0.65rem;
+}
+
+.question-card-header .question-text {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
+}
+
+.question-card-header .staff-row-actions {
+    flex-shrink: 0;
+    margin-top: -0.15rem;
+}
+
+.question-card-actions {
+    flex-shrink: 0;
+    align-self: center;
+    line-height: 1;
+}
+
+.question-text {
+    font-weight: 500;
+    font-size: 0.9375rem;
+    line-height: 1.45;
+    margin-bottom: 0.65rem;
+    word-break: break-word;
+}
+
+.answer-option {
+    padding: 0.45rem 0.6rem;
+    margin: 0.2rem 0;
+    border-radius: 6px;
+    background: #f9fafb;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    word-break: break-word;
+}
+
+.answer-option.correct {
+    background: #d1fae5;
+    border-left: 3px solid #10b981;
+}
+
+.qb-filters {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.75rem;
+    align-items: end;
+    margin-bottom: 0.75rem;
+}
+
+.qb-filters .form-label {
+    margin-bottom: 0.25rem;
+}
+
+.qb-filters-toggle {
+    align-self: end;
+    white-space: nowrap;
+    position: relative;
+}
+
+.qb-filters-toggle.has-active-filters {
+    border-color: var(--secondary-color, #2563eb);
+    color: var(--secondary-color, #2563eb);
+}
+
+.qb-filters-toggle .qb-filter-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.1rem;
+    height: 1.1rem;
+    margin-left: 0.35rem;
+    padding: 0 0.25rem;
+    border-radius: 999px;
+    background: var(--secondary-color, #2563eb);
+    color: #fff;
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.qb-filters-curriculum {
+    display: contents;
+}
+
+.qb-filters-curriculum-inner {
+    display: contents;
+}
+
+.qb-header-row {
+    gap: 0.75rem;
+}
+
+.qb-header-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+    flex-shrink: 0;
+}
+
+.qb-header-actions .btn {
+    white-space: nowrap;
+}
+
+.qb-header-actions .btn-label-short {
+    display: none;
+}
+
+#questionsFilterSummary {
+    margin-bottom: 0.75rem;
+}
+
+@media (max-width: 768px) {
+    .question-bank-page .page-header {
+        margin-bottom: 0.75rem;
+    }
+
+    .question-bank-page .page-header h2 {
+        font-size: 1.15rem;
+        margin-bottom: 0;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .question-bank-page .qb-header-row {
+        flex-direction: row;
+        align-items: center;
+    }
+
+    .question-bank-page .qb-header-actions {
+        width: auto;
+    }
+
+    .question-bank-page .qb-header-actions .btn {
+        flex: 0 0 auto;
+        font-size: 0.75rem;
+        padding: 0.35rem 0.55rem;
+        min-height: 36px !important;
+    }
+
+    .question-bank-page .qb-header-actions .btn i {
+        margin-right: 0.25rem !important;
+    }
+
+    .question-bank-page .qb-header-actions .btn-label-long {
+        display: none;
+    }
+
+    .question-bank-page .qb-header-actions .btn-label-short {
+        display: inline;
+    }
+
+    .qb-filters {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        align-items: stretch;
+    }
+
+    .qb-filters-search {
+        order: 1;
+    }
+
+    .qb-filters-toggle {
+        order: 2;
+        width: 100%;
+        min-height: 36px;
+    }
+
+    .qb-filters-curriculum {
+        display: block;
+        order: 3;
+    }
+
+    .qb-filters-curriculum-inner {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0.5rem;
+        padding-top: 0.15rem;
+    }
+
+    .qb-filters .form-select,
+    .qb-filters .form-control {
+        min-width: 0 !important;
+        width: 100%;
+    }
+
+    .question-card {
+        padding: 0.75rem;
+        margin-bottom: 0.65rem;
+        border-radius: 6px;
+    }
+
+    .question-text {
+        font-size: 0.875rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .answer-option {
+        padding: 0.35rem 0.5rem;
+        font-size: 0.8125rem;
+        margin: 0.15rem 0;
+    }
+
+    .answer-option .bi-check-circle-fill {
+        font-size: 0.85rem;
+    }
+
+    #questionsFilterSummary {
+        font-size: 0.75rem;
+        margin-bottom: 0.65rem;
+    }
+}
+
+@media (min-width: 769px) {
+    .qb-filters-toggle {
+        display: none !important;
+    }
+
+    .qb-filters-curriculum.collapse {
+        display: contents !important;
+        height: auto !important;
+        visibility: visible !important;
+    }
+
+    .qb-filters-curriculum-inner {
+        display: contents;
+    }
+}

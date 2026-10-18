@@ -13,11 +13,14 @@ $userName = $_SESSION['user_name'] ?? 'User';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <?php require __DIR__ . '/../includes/sidebar-state-early.php'; ?>
     <title>Manage Exams - PNP RTC X</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="../../assets/css/dashboard.css">
-    <link rel="stylesheet" href="../../assets/css/exam-question-editor.css">
+    <link rel="stylesheet" href="../../assets/css/dashboard.css?v=1">
+    <link rel="stylesheet" href="../../assets/css/staff-responsive.css?v=3">
+    <link rel="stylesheet" href="../../assets/css/exam-question-editor.css?v=2">
+    <link rel="stylesheet" href="../../assets/css/question-display.css?v=2">
     <style>
         .course-card { 
             border: 1px solid #dee2e6; 
@@ -26,32 +29,22 @@ $userName = $_SESSION['user_name'] ?? 'User';
             margin-bottom: 1rem; 
             background: white;
         }
-        .sidebar-menu .menu-label {
-            display: block;
-            padding: 12px 20px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: #9ca3af;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 20px;
-            margin-bottom: 8px;
-            cursor: default;
-            pointer-events: none;
+        .exam-question-count {
+            font-size: 0.9rem;
+            color: #4b5563;
+            white-space: nowrap;
         }
-        .sidebar-menu .menu-label i {
-            margin-right: 6px;
-            font-size: 0.8rem;
-            opacity: 0.6;
+        .exam-question-count strong {
+            color: #111827;
         }
     </style>
 </head>
 <body>
     <div class="top-nav">
-        <div class="nav-brand">
-            <h5>PNP Regional Training Center X</h5>
-            <p>Exam Management</p>
-        </div>
+        <?php
+        $navBrandSubtitle = 'Exam Management';
+        require __DIR__ . '/../includes/nav-brand.php';
+        ?>
         <div class="nav-user">
             <span><?= htmlspecialchars($userName) ?></span>
             <button class="btn-logout" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
@@ -61,6 +54,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <div class="dashboard-container">
         <div class="sidebar">
             <ul class="sidebar-menu">
+                <li><a href="../admin/profile.php"><i class="bi bi-person-circle"></i>Profile</a></li>
                 <li><a href="../../html/admin/dashboard.php"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
                 <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
                 <li><a href="users.php"><i class="bi bi-people-fill"></i>Manage Users</a></li>
@@ -69,7 +63,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <li><a href="exams.php" class="active"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
                 <li><a href="question-bank.php"><i class="bi bi-folder"></i>Question Bank</a></li>
                 <li><a href="reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
-                <li><a href="../admin/cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
+                <li><a href="cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
                 <li><a href="archive.php"><i class="bi bi-archive"></i>Archive</a></li>
                 <li><a href="audit-logs.php"><i class="bi bi-clock-history"></i>Audit Logs</a></li>
                 <li><a href="settings.php"><i class="bi bi-gear"></i>System Settings</a></li>
@@ -143,6 +137,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <form id="examForm">
                     <input type="hidden" id="examId" name="exam_id">
                     <div class="modal-body">
+                        <div id="examFormAlert"></div>
                         <div class="mb-3">
                             <label class="form-label">Course *</label>
                             <select id="examCourse" class="form-select" required></select>
@@ -170,12 +165,10 @@ $userName = $_SESSION['user_name'] ?? 'User';
                         <div class="mb-3">
                             <label class="form-label">Schedule Date/Time</label>
                             <input type="datetime-local" class="form-control" id="examSchedule">
-                            <small class="text-muted">When the exam becomes available</small>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Deadline <span class="text-danger">*</span></label>
                             <input type="datetime-local" class="form-control" id="examDeadline" required>
-                            <small class="text-muted">Students must START the exam before this time</small>
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Duration (minutes) <span class="text-danger">*</span></label>
@@ -183,9 +176,9 @@ $userName = $_SESSION['user_name'] ?? 'User';
                         </div>
                         <div class="mb-3">
                             <label class="form-label">Passing Score (%) <span class="text-danger">*</span></label>
-                            <input type="number" class="form-control" id="examPassing" min="0" max="100" step="0.01" required>
+                            <input type="number" class="form-control" id="examPassing" min="0" max="100" step="0.01" inputmode="decimal" pattern="[0-9]+([.][0-9]+)?" required>
                         </div>
-                        <div class="mb-3">
+                        <div class="mb-3" id="examQuestionsSection" data-validate-group="1">
                             <label class="form-label">Exam Questions</label>
                             <div class="d-flex justify-content-between align-items-center">
                                 <span id="questionCount" class="badge bg-info">0 questions assigned</span>
@@ -198,7 +191,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             <input type="checkbox" class="form-check-input" id="examRandomized">
                             <label class="form-check-label" for="examRandomized">Randomize questions</label>
                         </div>
-                        <div class="mb-3">
+                        <div class="mb-3" id="examAssignmentsSection" data-validate-group="1">
                             <label class="form-label">Assign Exam *</label>
                             <div class="row g-2">
                                 <div class="col-md-6">
@@ -220,7 +213,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             <small class="text-muted d-block mt-2">
                                 <span id="batchCount">0</span> section(s) assigned.
                             </small>
-                            <div class="d-flex justify-content-between align-items-center mt-2 gap-2 flex-wrap">
+                            <div class="d-flex justify-content-between align-items-center mt-2 gap-2 flex-wrap" id="examParticipantsSection" data-validate-group="1">
                                 <small class="text-muted" id="examParticipantSummary">Participants: assign sections first</small>
                                 <button type="button" class="btn btn-sm btn-outline-primary" id="manageParticipantsFromEditBtn" disabled>
                                     <i class="bi bi-people"></i> Manage Participants
@@ -316,31 +309,23 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 </div>
                 <div class="modal-body">
                     <p class="text-muted small mb-3" id="examImportSubjectNote">Questions are added to this exam as drafts until the exam is published.</p>
-                    <div class="d-flex flex-wrap gap-2 mb-3">
-                        <button type="button" class="btn btn-sm btn-outline" id="downloadExamImportTemplateBtn">
-                            <i class="bi bi-download me-2"></i>Download Template
-                        </button>
-                    </div>
                     <div class="alert alert-secondary small mb-3">
-                        Use the <strong>Questions</strong> sheet with columns:
+                        The <strong>Questions</strong> sheet includes Course, Module, and Subject at the top, then columns:
                         <code>Question</code>, <code>Option_A</code>–<code>Option_D</code>, <code>Option_E</code>, <code>Correct_Answer</code>.
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="examImportFile">Select File</label>
-                        <input type="file" class="form-control" id="examImportFile" accept=".xlsx,.xls,.csv">
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                            <div class="flex-grow-1" style="min-width: 220px;">
+                                <input type="file" class="form-control" id="examImportFile" accept=".xlsx,.xls,.csv">
+                            </div>
+                            <button type="button" class="btn btn-outline text-nowrap" id="downloadExamImportTemplateBtn">
+                                <i class="bi bi-download me-1"></i>Download Template
+                            </button>
+                        </div>
                         <small class="text-muted">Supported formats: Excel (.xlsx, .xls) or CSV (.csv)</small>
                     </div>
                     <div id="examImportValidation" class="mt-3" style="display: none;"></div>
-                    <div id="examImportPreview" class="mt-3" style="display: none;">
-                        <h6 class="mb-2">Preview</h6>
-                        <div id="examImportPreviewCards" class="d-none"></div>
-                        <div class="table-responsive" id="examImportPreviewTableWrap">
-                            <table class="table table-sm table-bordered" id="examImportPreviewTable">
-                                <thead></thead>
-                                <tbody></tbody>
-                            </table>
-                        </div>
-                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline" data-bs-dismiss="modal">Cancel</button>
@@ -380,7 +365,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                         </div>
                         <div id="participantsList"></div>
                         <div id="participantsEmpty" class="text-center text-muted py-4" style="display:none;">
-                            No examinees found in the assigned sections. Assign sections first, then manage participants.
+                            No trainees found in the assigned sections. Assign sections first, then manage participants.
                         </div>
                     </div>
                 </div>
@@ -396,11 +381,12 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/logout-handler.js?v=1"></script>
-    <script src="../../assets/js/auto-logout.js"></script>
+    <script src="../../assets/js/auto-logout.js?v=2"></script>
     <script src="../../js/masterfiles/drag-autoscroll.js?v=1"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-    <script src="../../js/masterfiles/question-import.js?v=2"></script>
-    <script src="../../js/masterfiles/exams.js?v=48"></script>
+    <script src="../../js/masterfiles/question-import.js?v=5"></script>
+    <script src="../../assets/js/modal-form-validation.js?v=1"></script>
+    <script src="../../js/masterfiles/exams.js?v=73"></script>
 </body>
 </html>
 

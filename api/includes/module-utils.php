@@ -1,7 +1,6 @@
 <?php
-/**
- * Course module schema helpers (Course → Module → Subject).
- */
+
+// Course module schema
 
 function moduleTableExists(PDO $pdo): bool
 {

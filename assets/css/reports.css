@@ -1,25 +1,5 @@
 /* Reports & Analytics Page Styles */
 
-.sidebar-menu .menu-label {
-    display: block;
-    padding: 12px 20px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    color: #9ca3af;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-top: 20px;
-    margin-bottom: 8px;
-    cursor: default;
-    pointer-events: none;
-}
-
-.sidebar-menu .menu-label i {
-    margin-right: 6px;
-    font-size: 0.8rem;
-    opacity: 0.6;
-}
-
 .chart-container {
     position: relative;
     height: 300px;
@@ -34,33 +14,12 @@
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.metric-card {
-    background: white;
-    border-radius: 8px;
-    padding: 1.5rem;
-    text-align: center;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+#metricsRow.is-loading .stat-value {
+    opacity: 0.45;
 }
 
-.metric-value {
-    font-size: 2.5rem;
-    font-weight: 700;
-    margin: 0.5rem 0;
-}
-
-.metric-label {
-    color: #6b7280;
-    font-size: 0.9rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.metric-icon {
-    font-size: 2rem;
-}
-
-.text-purple {
-    color: #a855f7 !important;
+.reports-clickable-row {
+    cursor: pointer;
 }
 
 #reportTabs .nav-link {
@@ -71,20 +30,6 @@
 #reportTabs .nav-link.active {
     color: #2563eb;
     font-weight: 600;
-}
-
-.metric-hint {
-    color: #9ca3af;
-    font-size: 0.75rem;
-    margin-top: 0.35rem;
-    line-height: 1.3;
-}
-
-.reports-context-note {
-    padding: 0.5rem 0.75rem;
-    background: #f8fafc;
-    border-left: 3px solid #2563eb;
-    border-radius: 0 4px 4px 0;
 }
 
 .reports-filter-chips {
@@ -115,10 +60,6 @@
     color: #64748b;
 }
 
-#metricsRow.is-loading .metric-value {
-    opacity: 0.45;
-}
-
 .chart-wrapper {
     position: relative;
 }
@@ -142,4 +83,23 @@
     justify-content: space-between;
     align-items: flex-start;
     gap: 0.75rem;
+}
+
+.reports-standing-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.75rem;
+    height: 1.75rem;
+    padding: 0 0.35rem;
+    border-radius: 999px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+.reports-standing-badge.is-top {
+    background: #fef3c7;
+    color: #b45309;
 }

@@ -1,7 +1,4 @@
-/**
- * Examinee Dashboard JavaScript
- * Handles data fetching and UI updates for the examinee dashboard
- */
+// Examinee dashboard
 
 const API_BASE = '../../api/examinee/';
 const DASHBOARD_API = API_BASE + 'dashboard.php';
@@ -60,8 +57,6 @@ function updateStatistics(data) {
         data.exams_available > 0 ? `${data.exams_available} exam${data.exams_available > 1 ? 's' : ''} ready` : 'No exams available';
 
     document.getElementById('examsCompleted').textContent = data.exams_completed || 0;
-    document.getElementById('completionRate').textContent =
-        `${data.completion_rate || 0}% completion rate`;
 
     const passed = data.passed_count || 0;
     const failed = data.failed_count || 0;
@@ -71,7 +66,7 @@ function updateStatistics(data) {
     document.getElementById('averageScore').textContent =
         data.average_score > 0 ? `${data.average_score}%` : '0%';
     document.getElementById('scoreChange').textContent =
-        data.average_score >= 75 ? 'Good performance' : 'Keep improving';
+        data.average_score >= 87.5 ? 'Good performance' : 'Keep improving';
 }
 
 function formatExamDescription(exam) {
@@ -134,7 +129,7 @@ function populateExamsTable(exams) {
         clearScheduleUnlockTimer();
         tbody.innerHTML = `
             <tr>
-                <td colspan="9" class="text-center text-muted py-4">
+                <td colspan="8" class="text-center text-muted py-4">
                     <i class="bi bi-inbox" style="font-size: 2rem;"></i>
                     <p class="mt-2">No exams available at this time</p>
                 </td>
@@ -161,7 +156,6 @@ function populateExamsTable(exams) {
         row.innerHTML = `
             <td>${escapeHtml(exam.Title)}</td>
             <td>${description}</td>
-            <td>${escapeHtml(exam.Course_Name)}</td>
             <td>${escapeHtml(exam.Subject_Name)}</td>
             <td>${questionCount}</td>
             <td>${meta.duration}</td>
@@ -182,7 +176,6 @@ function populateExamsTable(exams) {
                 <p class="examinee-data-card-desc">${description}</p>
                 <dl class="examinee-data-card-meta">
                     <div><dt>Subject</dt><dd>${escapeHtml(exam.Subject_Name || '—')}</dd></div>
-                    <div><dt>Course</dt><dd>${escapeHtml(exam.Course_Name || '—')}</dd></div>
                     <div><dt>Questions</dt><dd>${questionCount}</dd></div>
                     <div><dt>Duration</dt><dd>${meta.duration}</dd></div>
                     ${meta.scheduleLocked && meta.startsAt ? `<div class="examinee-data-card-meta-wide"><dt>Starts</dt><dd>${escapeHtml(meta.startsAt)}</dd></div>` : ''}
@@ -238,6 +231,15 @@ function scheduleExamsTableRefresh(exams) {
     }, delay);
 }
 
+function sortResultsLatestFirst(results) {
+    return [...results].sort((a, b) => {
+        const dateA = examDateTimeMs(a.Time_Ended || a.Submission_Date);
+        const dateB = examDateTimeMs(b.Time_Ended || b.Submission_Date);
+        if (dateB !== dateA) return dateB - dateA;
+        return (parseInt(b.Result_ID, 10) || 0) - (parseInt(a.Result_ID, 10) || 0);
+    });
+}
+
 function populateResultsTable(results) {
     const tbody = document.getElementById('resultsTableBody');
     const cards = document.getElementById('resultsCardsList');
@@ -266,60 +268,63 @@ function populateResultsTable(results) {
         return;
     }
 
-    results.forEach(result => {
+    sortResultsLatestFirst(results).forEach(result => {
+        const inProgress = Number(result.is_in_progress) === 1 || result.status === 'In progress';
         const submissionDate = formatDateTime(result.Submission_Date);
-        const statusBadge = result.status === 'Passed'
-            ? '<span class="badge bg-success">Passed</span>'
-            : '<span class="badge bg-danger">Failed</span>';
-        const canViewDetails = result.can_view_details !== false;
+        const statusBadge = inProgress
+            ? '<span class="badge bg-secondary">In progress</span>'
+            : (result.status === 'Passed'
+                ? '<span class="badge bg-success">Passed</span>'
+                : '<span class="badge bg-danger">Failed</span>');
+        const attemptLabel = inProgress
+            ? '<div class="small text-muted">In progress</div>'
+            : (result.attempt_number ? `<div class="small text-muted">Attempt ${result.attempt_number}</div>` : '');
+        const reviewDisabled = result.can_view_details === false;
 
         const row = document.createElement('tr');
-        if (canViewDetails) {
-            row.className = 'examinee-clickable-row';
-            row.setAttribute('role', 'button');
-            row.setAttribute('tabindex', '0');
-            row.addEventListener('click', () => handleViewDetails(result.Result_ID));
-            row.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleViewDetails(result.Result_ID);
-                }
-            });
-        }
+        row.className = 'examinee-clickable-row';
+        row.setAttribute('role', 'button');
+        row.setAttribute('tabindex', '0');
+        row.addEventListener('click', () => handleViewDetails(result.Result_ID));
+        row.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleViewDetails(result.Result_ID);
+            }
+        });
         row.innerHTML = `
-            <td>${escapeHtml(result.exam_title)}</td>
+            <td>${escapeHtml(result.exam_title)}${attemptLabel}</td>
             <td>${submissionDate}</td>
-            <td>${result.Score}</td>
-            <td>${result.Percentage}%</td>
-            <td>${statusBadge}${canViewDetails ? '' : ' <span class="text-muted small ms-1"><i class="bi bi-lock"></i></span>'}</td>
+            <td>${inProgress ? '—' : result.Score}</td>
+            <td>${inProgress ? '—' : `${result.Percentage}%`}</td>
+            <td>${statusBadge}${reviewDisabled && !inProgress ? ' <span class="text-muted small ms-1"><i class="bi bi-lock"></i></span>' : ''}</td>
         `;
         tbody.appendChild(row);
 
         if (cards) {
             const card = document.createElement('article');
-            card.className = 'examinee-data-card' + (canViewDetails ? ' examinee-clickable-card' : '');
-            if (canViewDetails) {
-                card.setAttribute('role', 'button');
-                card.setAttribute('tabindex', '0');
-                card.addEventListener('click', () => handleViewDetails(result.Result_ID));
-                card.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        handleViewDetails(result.Result_ID);
-                    }
-                });
-            }
+            card.className = 'examinee-data-card examinee-clickable-card';
+            card.setAttribute('role', 'button');
+            card.setAttribute('tabindex', '0');
+            card.addEventListener('click', () => handleViewDetails(result.Result_ID));
+            card.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleViewDetails(result.Result_ID);
+                }
+            });
             card.innerHTML = `
                 <div class="examinee-data-card-header">
                     <h6 class="examinee-data-card-title">${escapeHtml(result.exam_title)}</h6>
+                    ${attemptLabel}
                     ${statusBadge}
                 </div>
                 <dl class="examinee-data-card-meta">
                     <div><dt>Date taken</dt><dd>${submissionDate}</dd></div>
-                    <div><dt>Score</dt><dd>${result.Score}</dd></div>
-                    <div><dt>Percentage</dt><dd>${result.Percentage}%</dd></div>
+                    <div><dt>Score</dt><dd>${inProgress ? '—' : result.Score}</dd></div>
+                    <div><dt>Average</dt><dd>${inProgress ? '—' : `${result.Percentage}%`}</dd></div>
                 </dl>
-                ${canViewDetails ? '' : '<p class="text-muted small mb-0"><i class="bi bi-lock"></i> Response review disabled</p>'}
+                ${reviewDisabled ? '<p class="text-muted small mb-0"><i class="bi bi-lock"></i> Score summary only</p>' : ''}
             `;
             cards.appendChild(card);
         }
@@ -357,6 +362,12 @@ async function handleTakeExam(examId, buttonEl) {
     const requiresCode = button.getAttribute('data-requires-code') === 'true';
 
     if (hasStarted) {
+        const sessionId = button.getAttribute('data-session-id');
+        if (sessionId) {
+            window.location.href = `exam.php?session_id=${encodeURIComponent(sessionId)}`;
+            return;
+        }
+
         Swal.fire({
             title: 'Continuing exam...',
             allowOutsideClick: false,
@@ -368,7 +379,7 @@ async function handleTakeExam(examId, buttonEl) {
             const response = await axios.post(START_EXAM_API, { exam_id: examId });
             if (response.data.success) {
                 Swal.close();
-                window.location.href = `../student masterfiles/exam.php?session_id=${response.data.data.session_id}`;
+                window.location.href = `exam.php?session_id=${response.data.data.session_id}`;
             } else {
                 Swal.fire({ title: 'Error', text: response.data.message, icon: 'error', width: getSwalWidth() });
             }
@@ -448,7 +459,7 @@ async function handleTakeExam(examId, buttonEl) {
 
         if (response.data.success) {
             Swal.close();
-            window.location.href = `../student masterfiles/exam.php?session_id=${response.data.data.session_id}`;
+            window.location.href = `exam.php?session_id=${response.data.data.session_id}`;
         } else {
             Swal.fire({
                 title: 'Error',
@@ -464,16 +475,7 @@ async function handleTakeExam(examId, buttonEl) {
 }
 
 function handleViewDetails(resultId) {
-    window.location.href = `../student masterfiles/result.php?result_id=${resultId}`;
-}
-
-function parseExamDateTime(dateString) {
-    if (!dateString) {
-        return null;
-    }
-    const normalized = String(dateString).trim().replace(' ', 'T');
-    const date = new Date(normalized);
-    return Number.isNaN(date.getTime()) ? null : date;
+    window.location.href = `result.php?result_id=${resultId}`;
 }
 
 function isExamScheduleLocked(exam) {
@@ -490,7 +492,10 @@ function isExamScheduleLocked(exam) {
 function getExamStatus(exam) {
     if (exam.has_started && exam.exam_deadline) {
         const now = new Date();
-        const deadline = new Date(exam.exam_deadline);
+        const deadline = parseExamDateTime(exam.exam_deadline);
+        if (!deadline) {
+            return { text: 'In Progress', color: 'info' };
+        }
         const timeRemaining = deadline - now;
 
         if (timeRemaining <= 0) {
@@ -511,7 +516,10 @@ function getExamStatus(exam) {
     }
 
     const now = new Date();
-    const deadline = new Date(exam.Deadline);
+    const deadline = parseExamDateTime(exam.Deadline);
+    if (!deadline) {
+        return { text: 'Available', color: 'success' };
+    }
     const timeUntilDeadline = deadline - now;
 
     if (timeUntilDeadline < 0) {
@@ -524,8 +532,8 @@ function getExamStatus(exam) {
 }
 
 function formatDate(dateString) {
-    if (!dateString) return '';
-    const date = new Date(dateString);
+    const date = parseExamDateTime(dateString);
+    if (!date) return '';
     return date.toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'short',
@@ -534,8 +542,8 @@ function formatDate(dateString) {
 }
 
 function formatDateTime(dateString) {
-    if (!dateString) return '';
-    const date = new Date(dateString);
+    const date = parseExamDateTime(dateString);
+    if (!date) return '';
     return date.toLocaleString('en-US', {
         year: 'numeric',
         month: 'short',

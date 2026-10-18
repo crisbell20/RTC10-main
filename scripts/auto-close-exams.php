@@ -1,8 +1,9 @@
 <?php
-/**
- * Auto-close exams past deadline and finalize unsubmitted / in-progress attempts.
- * Run periodically (e.g., every 5 minutes via cron).
- */
+// Auto-close exams
+if (php_sapi_name() !== 'cli') {
+    http_response_code(403);
+    die('This script can only be run from the command line.');
+}
 
 require_once __DIR__ . '/../api/config/connection-pdo.php';
 require_once __DIR__ . '/../api/includes/exam-deadline-finalize-utils.php';

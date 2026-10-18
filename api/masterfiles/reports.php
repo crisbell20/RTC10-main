@@ -34,6 +34,8 @@ function sendError($message, $statusCode = 400) {
 }
 
 try {
+    $latestResultSql = ' AND ' . latestFinishedResultMatchSql('es', 'r');
+
     if ($action === 'batches') {
         $courseId = !empty($_GET['course_id']) ? (int)$_GET['course_id'] : null;
         $batchVisibility = courseBatchVisibilityCondition('b');
@@ -80,15 +82,12 @@ try {
                    COUNT(r.Result_ID) AS finished_submissions,
                    ROUND(AVG(r.Percentage), 1) AS avg_score,
                    SUM(CASE WHEN r.Percentage >= e.Passing_Score THEN 1 ELSE 0 END) AS passed_count
-            {$joins} WHERE {$filter['sql']}
+            {$joins} WHERE {$filter['sql']}{$latestResultSql}
         ");
         $stmt->execute($filter['params']);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
         $finished = (int)($row['finished_submissions'] ?? 0);
         $passed = (int)($row['passed_count'] ?? 0);
-
-        $assignedStudents = countEnrolledExamineesInScope($pdo, $_GET);
-        $examsInScope = countExamsInReportsScope($pdo, $_GET);
 
         $assignmentMetrics = fetchStudentReportMetrics($pdo, $_GET);
         $cohortPass = computeCohortAssignmentPassRate($assignmentMetrics);
@@ -96,6 +95,15 @@ try {
         $obligationPassed = (int)$cohortPass['passed_obligations'];
         $obligationEligible = (int)$cohortPass['eligible_obligations'];
         $avgScore = computeCohortMeanStudentAverage($assignmentMetrics);
+        $avgGrade = computeCohortMeanStudentGradeAverage($assignmentMetrics);
+
+        $subjectId = !empty($_GET['subject_id']) ? (int)$_GET['subject_id'] : 0;
+        if ($subjectId) {
+            $assignedStudents = countStudentsWithAssignments($assignmentMetrics);
+        } else {
+            $assignedStudents = countEnrolledExamineesInScope($pdo, $_GET);
+        }
+        $examsInScope = countExamsInReportsScope($pdo, $_GET);
 
         $atRiskRows = buildAtRiskStudentRows($assignmentMetrics, $examType, PHP_INT_MAX);
         $atRiskCount = count($atRiskRows);
@@ -109,6 +117,7 @@ try {
             'exams_with_results' => (int)($row['exams_administered'] ?? 0),
             'finished_submissions' => $finished,
             'avg_score' => $avgScore,
+            'avg_grade' => $avgGrade,
             'pass_rate' => $passRate,
             'pass_rate_mode' => 'assignment',
             'passed_count' => $obligationPassed,
@@ -123,6 +132,8 @@ try {
     if ($action === 'performance_trend') {
         $filter = buildResultFilters($pdo, $_GET);
         $joins = baseResultJoins($pdo, $filter['needs_user']);
+        $questionJoin = reportsQuestionCountJoin();
+        $gradeAvg = reportsGradePercentSql();
         $trendDate = reportsTrendDateExpression();
 
         // Average score per exam, ordered chronologically by schedule/completion date.
@@ -130,10 +141,12 @@ try {
             SELECT e.Exam_ID,
                    e.Title AS exam_title,
                    {$trendDate} AS date,
-                   ROUND(AVG(r.Percentage), 1) AS avg_score,
+                   ROUND(AVG(r.Percentage), 1) AS avg_raw_score,
+                   ROUND(AVG({$gradeAvg}), 1) AS avg_grade,
                    COUNT(r.Result_ID) AS submission_count
             {$joins}
-            WHERE {$filter['sql']}
+            {$questionJoin}
+            WHERE {$filter['sql']}{$latestResultSql}
             GROUP BY e.Exam_ID, e.Title, e.Schedule_Date
             ORDER BY {$trendDate} ASC, e.Exam_ID ASC
         ");
@@ -162,15 +175,20 @@ try {
     if ($action === 'top_subjects') {
         $filter = buildResultFilters($pdo, $_GET);
         $joins = baseResultJoins($pdo, $filter['needs_user']);
+        $questionJoin = reportsQuestionCountJoin();
+        $gradeAvg = reportsGradePercentSql();
         $stmt = $pdo->prepare("
             SELECT s.Subject_Name,
-                   ROUND(AVG(r.Percentage), 1) AS avg_score,
+                   ROUND(AVG(r.Percentage), 1) AS avg_raw_score,
+                   ROUND(AVG({$gradeAvg}), 1) AS avg_grade,
+                   ROUND(100.0 * SUM(CASE WHEN r.Percentage >= e.Passing_Score THEN 1 ELSE 0 END) / COUNT(r.Result_ID), 1) AS pass_rate,
                    COUNT(r.Result_ID) AS attempt_count
             {$joins}
-            WHERE {$filter['sql']}
+            {$questionJoin}
+            WHERE {$filter['sql']}{$latestResultSql}
             GROUP BY s.Subject_ID, s.Subject_Name
             HAVING attempt_count >= 1
-            ORDER BY avg_score DESC
+            ORDER BY avg_grade DESC
             LIMIT 5
         ");
         $stmt->execute($filter['params']);
@@ -180,15 +198,20 @@ try {
     if ($action === 'weak_subjects') {
         $filter = buildResultFilters($pdo, $_GET);
         $joins = baseResultJoins($pdo, $filter['needs_user']);
+        $questionJoin = reportsQuestionCountJoin();
+        $gradeAvg = reportsGradePercentSql();
         $stmt = $pdo->prepare("
             SELECT s.Subject_Name,
-                   ROUND(AVG(r.Percentage), 1) AS avg_score,
+                   ROUND(AVG(r.Percentage), 1) AS avg_raw_score,
+                   ROUND(AVG({$gradeAvg}), 1) AS avg_grade,
+                   ROUND(100.0 * SUM(CASE WHEN r.Percentage >= e.Passing_Score THEN 1 ELSE 0 END) / COUNT(r.Result_ID), 1) AS pass_rate,
                    COUNT(r.Result_ID) AS attempt_count
             {$joins}
-            WHERE {$filter['sql']}
+            {$questionJoin}
+            WHERE {$filter['sql']}{$latestResultSql}
             GROUP BY s.Subject_ID, s.Subject_Name
             HAVING attempt_count >= 1
-            ORDER BY avg_score ASC
+            ORDER BY avg_grade ASC
             LIMIT 5
         ");
         $stmt->execute($filter['params']);
@@ -202,16 +225,20 @@ try {
 
         $filter = buildResultFilters($pdo, $_GET);
         $joins = baseResultJoins($pdo, $filter['needs_user']);
+        $questionJoin = reportsQuestionCountJoin();
+        $gradeAvg = reportsGradePercentSql();
         $moduleActive = activeArchiveCondition($pdo, 'tbl_module', 'm');
 
         $stmt = $pdo->prepare("
             SELECT m.Module_ID,
                    m.Module_Name,
                    m.Sort_Order,
-                   ROUND(AVG(r.Percentage), 1) AS avg_score,
+                   ROUND(AVG(r.Percentage), 1) AS avg_raw_score,
+                   ROUND(AVG({$gradeAvg}), 1) AS avg_grade,
                    COUNT(r.Result_ID) AS attempt_count
             {$joins}
-            WHERE {$filter['sql']} AND {$moduleActive}
+            {$questionJoin}
+            WHERE {$filter['sql']}{$latestResultSql} AND {$moduleActive}
             GROUP BY m.Module_ID, m.Module_Name, m.Sort_Order
             HAVING attempt_count >= 1
             ORDER BY m.Sort_Order ASC, m.Module_Name ASC
@@ -223,10 +250,15 @@ try {
     if ($action === 'participation') {
         $filter = buildResultFilters($pdo, $_GET);
         $joins = baseResultJoins($pdo, $filter['needs_user']);
+        $questionJoin = reportsQuestionCountJoin();
+        $gradeAvg = reportsGradePercentSql();
         $stmt = $pdo->prepare("
             SELECT e.Exam_ID, e.Title AS exam_title, COUNT(DISTINCT es.User_ID) AS participant_count,
-                   ROUND(AVG(r.Percentage), 1) AS avg_score
-            {$joins} WHERE {$filter['sql']}
+                   ROUND(AVG(r.Percentage), 1) AS avg_raw_score,
+                   ROUND(AVG({$gradeAvg}), 1) AS avg_grade
+            {$joins}
+            {$questionJoin}
+            WHERE {$filter['sql']}{$latestResultSql}
             GROUP BY e.Exam_ID, e.Title ORDER BY participant_count DESC LIMIT 10
         ");
         $stmt->execute($filter['params']);
@@ -237,20 +269,48 @@ try {
         $filter = buildResultFilters($pdo, $_GET);
         $examType = $filter['exam_type'];
         $statusFilter = $_GET['student_status'] ?? 'all';
+        $subjectId = !empty($_GET['subject_id']) ? (int)$_GET['subject_id'] : 0;
+        $subjectName = null;
 
         $students = fetchStudentReportMetrics($pdo, $_GET);
-        attachSubjectHighlights($pdo, $_GET, $students);
 
-        usort($students, fn($a, $b) => (float)($b['avg_percentage'] ?? 0) <=> (float)($a['avg_percentage'] ?? 0));
+        if ($subjectId) {
+            $stmt = $pdo->prepare('SELECT Subject_Name FROM tbl_subject WHERE Subject_ID = ?');
+            $stmt->execute([$subjectId]);
+            $subjectName = (string)($stmt->fetchColumn() ?: '');
+
+            $students = array_values(array_filter(
+                $students,
+                static fn(array $student): bool => (int)($student['exams_assigned'] ?? 0) >= 1
+            ));
+        } else {
+            // Subject highlights no longer shown in trainee rankings table.
+        }
+
+        $summary = summarizeTraineeStatusCounts($students);
 
         if ($statusFilter === 'at_risk') {
             $students = array_values(array_filter($students, fn($s) => $s['status'] === 'At risk'));
         } elseif ($statusFilter === 'on_track') {
             $students = array_values(array_filter($students, fn($s) => $s['status'] === 'On track'));
-        } elseif ($statusFilter === 'needs_review') {
-            $students = array_values(array_filter($students, fn($s) => $s['status'] === 'Needs review'));
         }
-        sendSuccess($students);
+
+        sortStudentsByPerformanceDesc($students);
+
+        foreach ($students as $index => &$student) {
+            $student['standing'] = $index + 1;
+        }
+        unset($student);
+
+        sendSuccess([
+            'students' => $students,
+            'meta' => [
+                'mode' => $subjectId ? 'by_subject' : 'all',
+                'subject_id' => $subjectId ?: null,
+                'subject_name' => $subjectId ? $subjectName : null,
+                'summary' => $summary,
+            ],
+        ]);
     }
 
     if ($action === 'at_risk') {
@@ -283,11 +343,11 @@ try {
         $examType = $filter['exam_type'];
         $curriculum = subjectCurriculumJoin($pdo);
 
-        $stmt = $pdo->prepare('SELECT User_ID, Fullname, Academic_Number FROM tbl_user WHERE User_ID = ?');
+        $stmt = $pdo->prepare('SELECT User_ID, ' . personNameSql() . ' AS Fullname, Badge_Number FROM tbl_user WHERE User_ID = ?');
         $stmt->execute([$userId]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!$user) {
-            sendError('Student not found', 404);
+            sendError('Trainee not found', 404);
         }
 
         $examTypeSelect = examTypeColumnExists($pdo) ? 'e.Exam_Type,' : '';
@@ -295,8 +355,10 @@ try {
         $stmt = $pdo->prepare("
             SELECT r.Result_ID, r.Score, r.Percentage, r.Remarks, r.Submission_Date,
                    e.Exam_ID, e.Title AS exam_title, e.Passing_Score, {$examTypeSelect}
-                   s.Subject_Name, c.Course_Name,
-                   CASE WHEN r.Percentage >= e.Passing_Score THEN 'Passed' ELSE 'Failed' END AS status
+                   s.Subject_ID, s.Subject_Name, c.Course_Name,
+                   es.Time_Started, es.Time_Ended,
+                   CASE WHEN r.Percentage >= e.Passing_Score THEN 'Passed' ELSE 'Failed' END AS status,
+                   (SELECT COUNT(*) FROM tbl_exam_question eq WHERE eq.Exam_ID = e.Exam_ID) AS total_questions
             FROM tbl_result r
             INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
             INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
@@ -306,7 +368,20 @@ try {
             ORDER BY r.Submission_Date DESC
         ");
         $stmt->execute(array_merge([$userId], $filter['params']));
-        $attempts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $attempts = annotateAttemptHistory($stmt->fetchAll(PDO::FETCH_ASSOC));
+        $completedAttempts = [];
+        foreach ($attempts as &$attempt) {
+            enrichReportResultRow($attempt);
+            if (!empty($attempt['is_in_progress'])) {
+                $attempt['status'] = 'In progress';
+                $attempt['Remarks'] = 'In progress';
+                $attempt['attempt_number'] = null;
+                $attempt['is_latest'] = false;
+                continue;
+            }
+            $completedAttempts[] = $attempt;
+        }
+        unset($attempt);
 
         $assignmentRow = null;
         foreach (fetchStudentReportMetrics($pdo, $_GET) as $metricRow) {
@@ -316,14 +391,19 @@ try {
             }
         }
 
-        $examsTaken = (int)($assignmentRow['exams_taken'] ?? count($attempts));
-        $passedCount = (int)($assignmentRow['passed_count'] ?? count(array_filter($attempts, fn($a) => $a['status'] === 'Passed')));
+        $examsTaken = (int)($assignmentRow['exams_taken'] ?? count($completedAttempts));
+        $passedCount = (int)($assignmentRow['passed_count'] ?? count(array_filter($completedAttempts, fn($a) => $a['status'] === 'Passed')));
         $avg = (float)($assignmentRow['avg_percentage'] ?? ($examsTaken > 0
-            ? round(array_sum(array_column($attempts, 'Percentage')) / $examsTaken, 1)
+            ? round(array_sum(array_column($completedAttempts, 'raw_percent')) / $examsTaken, 1)
+            : 0));
+        $avgGrade = (float)($assignmentRow['avg_grade'] ?? ($examsTaken > 0
+            ? round(array_sum(array_column($completedAttempts, 'grade_percent')) / $examsTaken, 1)
             : 0));
         $avgPassing = (float)($assignmentRow['avg_passing_score'] ?? ($examsTaken > 0
-            ? round(array_sum(array_column($attempts, 'Passing_Score')) / $examsTaken, 1)
+            ? round(array_sum(array_column($completedAttempts, 'Passing_Score')) / $examsTaken, 1)
             : 0));
+
+        $subjectPerformance = buildStudentSubjectPerformanceRollup($completedAttempts);
 
         sendSuccess([
             'student' => $user,
@@ -333,18 +413,17 @@ try {
                 'missing_overdue' => (int)($assignmentRow['missing_overdue'] ?? 0),
                 'eligible_assigned' => (int)($assignmentRow['eligible_assigned'] ?? $examsTaken),
                 'avg_percentage' => $avg,
+                'avg_grade' => $avgGrade,
                 'pass_rate' => (float)($assignmentRow['pass_rate'] ?? ($examsTaken > 0 ? round(($passedCount / $examsTaken) * 100, 1) : 0)),
-                'status' => $assignmentRow['status'] ?? evaluateStudentStatus(
-                    $examType,
-                    $examsTaken,
-                    $passedCount,
-                    $avg,
-                    $avgPassing,
-                    (int)($assignmentRow['missing_overdue'] ?? 0),
-                    (int)($assignmentRow['eligible_assigned'] ?? $examsTaken),
-                    (int)($assignmentRow['effective_failed'] ?? max(0, $examsTaken - $passedCount))
-                ),
+                'status' => $assignmentRow['status'] ?? evaluateTraineeRankingStatus([
+                    'exams_taken' => $examsTaken,
+                    'eligible_assigned' => (int)($assignmentRow['eligible_assigned'] ?? $examsTaken),
+                    'avg_grade' => $avgGrade,
+                    'avg_percentage' => $avg,
+                ]),
             ],
+            'subjects' => $subjectPerformance['subjects'],
+            'at_risk_subjects' => $subjectPerformance['at_risk_subjects'],
             'attempts' => $attempts,
         ]);
     }
@@ -361,7 +440,7 @@ try {
         $curriculum = subjectCurriculumJoin($pdo);
 
         $stmt = $pdo->prepare("
-            SELECT s.Subject_ID, s.Subject_Name, s.Subject_Code, c.Course_Name
+            SELECT s.Subject_ID, s.Subject_Name, c.Course_Name
             FROM tbl_subject s
             {$curriculum['join']}
             WHERE s.Subject_ID = ?
@@ -392,19 +471,26 @@ try {
             {$curriculum['join']}
             INNER JOIN tbl_user u ON es.User_ID = u.User_ID
         ";
-        $stmt = $pdo->prepare("SELECT COUNT(*) AS total {$joins} WHERE {$filter['sql']}");
+        $officialResultSql = ' AND ' . finishedSittingPredicateSql('es') . ' AND ' . latestFinishedResultMatchSql('es', 'r');
+        $stmt = $pdo->prepare("SELECT COUNT(*) AS total {$joins} WHERE {$filter['sql']}{$officialResultSql}");
         $stmt->execute($filter['params']);
         $total = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
         $stmt = $pdo->prepare("
-            SELECT r.Result_ID, u.User_ID, u.Fullname AS examinee_name, e.Exam_ID, e.Title AS exam_title,
+            SELECT r.Result_ID, u.User_ID, " . personNameSql('u') . " AS examinee_name, e.Exam_ID, e.Title AS exam_title,
                    s.Subject_Name, r.Submission_Date, r.Score, r.Percentage,
-                   CASE WHEN r.Percentage >= e.Passing_Score THEN 'Passed' ELSE 'Failed' END AS status, e.Passing_Score
-            {$joins} WHERE {$filter['sql']}
+                   CASE WHEN r.Percentage >= e.Passing_Score THEN 'Passed' ELSE 'Failed' END AS status, e.Passing_Score,
+                   (SELECT COUNT(*) FROM tbl_exam_question eq WHERE eq.Exam_ID = e.Exam_ID) AS total_questions
+            {$joins} WHERE {$filter['sql']}{$officialResultSql}
             ORDER BY r.Submission_Date DESC LIMIT {$limit} OFFSET {$offset}
         ");
         $stmt->execute($filter['params']);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($rows as &$row) {
+            enrichReportResultRow($row);
+        }
+        unset($row);
         sendSuccess([
-            'rows' => $stmt->fetchAll(PDO::FETCH_ASSOC),
+            'rows' => $rows,
             'pagination' => ['page' => $page, 'limit' => $limit, 'total' => $total, 'pages' => max(1, (int)ceil($total / $limit))],
         ]);
     }
@@ -427,6 +513,7 @@ try {
 
     sendError('Invalid action');
 } catch (Exception $e) {
+    error_log('reports.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }

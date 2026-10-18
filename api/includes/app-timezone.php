@@ -1,7 +1,9 @@
 <?php
-/**
- * Application timezone — exam schedules/deadlines are stored as local wall-clock datetimes.
- */
+
+// Application timezone 
+// Exam schedules/deadlines
+require_once __DIR__ . '/csrf-guard.php';
+
 const RTC_APP_TIMEZONE = 'Asia/Manila';
 const RTC_MYSQL_TIME_ZONE = '+08:00';
 

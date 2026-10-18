@@ -1,7 +1,6 @@
 <?php
-/**
- * Exam code generation and validation helpers.
- */
+
+// Exam code generation and validation
 
 require_once __DIR__ . '/audit-log-utils.php';
 
@@ -12,9 +11,7 @@ function normalizeExamCode($code) {
     return strtoupper(preg_replace('/[\s\-]/', '', trim((string)$code)));
 }
 
-/**
- * Generate a unique 6-character exam code (Google Classroom style).
- */
+// Generate a unique 6-character exam code
 function generateUniqueExamCode(PDO $pdo, int $length = 6): string {
     $chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
     $maxAttempts = 100;
@@ -41,9 +38,7 @@ function generateUniqueExamCode(PDO $pdo, int $length = 6): string {
     throw new RuntimeException('Unable to generate a unique exam code');
 }
 
-/**
- * Check whether exam code columns exist (migration applied).
- */
+// Check whether exam code columns exist
 function examCodeColumnsExist(PDO $pdo): bool {
     static $exists = null;
     if ($exists !== null) {
@@ -60,9 +55,7 @@ function examCodeColumnsExist(PDO $pdo): bool {
     return $exists;
 }
 
-/**
- * Log an exam code verification attempt when attempt table exists.
- */
+// Log an exam code verification attempt
 function logExamCodeAttempt(PDO $pdo, int $examId, int $userId, bool $success): void {
     try {
         $tableCheck = $pdo->query("SHOW TABLES LIKE 'tbl_exam_code_attempt'");
@@ -81,9 +74,7 @@ function logExamCodeAttempt(PDO $pdo, int $examId, int $userId, bool $success): 
     }
 }
 
-/**
- * Return failed attempt count in the last 15 minutes for rate limiting.
- */
+// Return failed attempt count in the last 15 minutes
 function getRecentFailedCodeAttempts(PDO $pdo, int $examId, int $userId): int {
     try {
         $tableCheck = $pdo->query("SHOW TABLES LIKE 'tbl_exam_code_attempt'");
@@ -122,9 +113,7 @@ function logExamAuditAction(PDO $pdo, int $userId, string $action, string $outco
     ]);
 }
 
-/**
- * Check whether Allow_Response_Review column exists.
- */
+// Check whether Allow_Response_Review column exists
 function responseReviewColumnExists(PDO $pdo): bool {
     static $exists = null;
     if ($exists !== null) {
@@ -141,9 +130,7 @@ function responseReviewColumnExists(PDO $pdo): bool {
     return $exists;
 }
 
-/**
- * Determine if examinees may view question-level responses for an exam row.
- */
+// Determine if examinees may view question-level responses
 function examAllowsResponseReview(array $examRow, bool $columnExists = true): bool {
     if (!$columnExists) {
         return true;
@@ -152,9 +139,7 @@ function examAllowsResponseReview(array $examRow, bool $columnExists = true): bo
     return !empty($examRow['Allow_Response_Review']);
 }
 
-/**
- * Check whether Personnel_Rank column exists on tbl_user.
- */
+// Check whether Personnel_Rank column exists
 function personnelRankColumnExists(PDO $pdo): bool {
     static $exists = null;
     if ($exists !== null) {
@@ -171,9 +156,7 @@ function personnelRankColumnExists(PDO $pdo): bool {
     return $exists;
 }
 
-/**
- * Grade scale: (score / total items) * 50 + 50  →  range 50–100.
- */
+// Grade scale: (score / total items) * 50 + 50
 function computeGradePercent(float $score, int $totalItems): float {
     if ($totalItems <= 0) {
         return 50.0;
@@ -189,17 +172,44 @@ function computeGradePercent(float $score, int $totalItems): float {
     return round(($ratio * 50) + 50, 2);
 }
 
-/**
- * Map exam Passing_Score (0–100 raw %) to grade-scale passing threshold.
- */
+// Map exam Passing_Score (0–100 raw %) to grade-scale passing threshold
 function computeGradePassingThreshold(float $passingScorePercent): float {
     $pct = max(0, min(100, $passingScorePercent));
     return round(($pct / 100) * 50 + 50, 2);
 }
 
-/**
- * Standard PNP personnel ranks for dropdowns.
- */
+function applyExamineeGradeToResult(array &$row): void {
+    $totalQuestions = (int)($row['total_questions'] ?? 0);
+    $score = (float)($row['Score'] ?? 0);
+    $passingRaw = (float)($row['Passing_Score'] ?? 50);
+
+    $gradePercent = computeGradePercent($score, $totalQuestions);
+    $gradePassing = computeGradePassingThreshold($passingRaw);
+    $passed = $gradePercent >= $gradePassing;
+
+    $row['Percentage'] = $gradePercent;
+    $row['Passing_Score'] = $gradePassing;
+    $row['Remarks'] = $passed ? 'Passed' : 'Failed';
+
+    if (array_key_exists('status', $row)) {
+        $row['status'] = $passed ? 'Passed' : 'Failed';
+    }
+}
+
+// Grade-scale score from a result row
+function examineeGradeScoreFromRow(array $row): float {
+    return computeGradePercent(
+        (float)($row['Score'] ?? 0),
+        (int)($row['total_questions'] ?? 0)
+    );
+}
+
+// Whether a result row passes on the PNP grade scale
+function examineePassedOnGradeScale(array $row): bool {
+    return examineeGradeScoreFromRow($row) >= computeGradePassingThreshold((float)($row['Passing_Score'] ?? 50));
+}
+
+// Standard PNP personnel ranks
 function getPersonnelRankOptions(): array {
     return [
         'PAT', 'PCPL', 'PSSG', 'PMSG', 'PSMS', 'PCMS',
@@ -208,18 +218,14 @@ function getPersonnelRankOptions(): array {
     ];
 }
 
-/**
- * Normalize rank input to uppercase abbreviation, or null when blank.
- */
+// Normalize rank input
 function normalizePersonnelRank(?string $rank): ?string
 {
     $normalized = strtoupper(trim((string)$rank));
     return $normalized !== '' ? $normalized : null;
 }
 
-/**
- * Validate rank for import/forms. Returns error message or null when valid/empty.
- */
+// Validate rank
 function validatePersonnelRank(?string $rank): ?string
 {
     $normalized = normalizePersonnelRank($rank);

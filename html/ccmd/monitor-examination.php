@@ -14,35 +14,21 @@ $examId = isset($_GET['exam_id']) ? (int)$_GET['exam_id'] : 0;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <?php require __DIR__ . '/../includes/sidebar-state-early.php'; ?>
     <title>Monitor Examination - CCMD</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="../../assets/css/dashboard.css">
+    <link rel="stylesheet" href="../../assets/css/dashboard.css?v=1">
+    <link rel="stylesheet" href="../../assets/css/staff-responsive.css?v=3">
     <link rel="stylesheet" href="../../assets/css/ccmd.css">
     <link rel="stylesheet" href="../../assets/css/monitor.css?v=2">
-    <style>
-        .sidebar-menu .menu-label {
-            display: block;
-            padding: 12px 20px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: #9ca3af;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 20px;
-            margin-bottom: 8px;
-            cursor: default;
-            pointer-events: none;
-        }
-        .sidebar-menu .menu-label i { margin-right: 6px; font-size: 0.8rem; opacity: 0.6; }
-    </style>
-</head>
+    </head>
 <body>
     <div class="top-nav">
-        <div class="nav-brand">
-            <h5>PNP Regional Training Center X</h5>
-            <p>Live Exam Monitoring</p>
-        </div>
+        <?php
+        $navBrandSubtitle = 'Live Exam Monitoring';
+        require __DIR__ . '/../includes/nav-brand.php';
+        ?>
         <div class="nav-user">
             <span><?= htmlspecialchars($userName) ?></span>
             <button class="btn-logout" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
@@ -52,13 +38,13 @@ $examId = isset($_GET['exam_id']) ? (int)$_GET['exam_id'] : 0;
     <div class="dashboard-container">
         <div class="sidebar">
             <ul class="sidebar-menu">
+                <li><a href="profile.php"><i class="bi bi-person-circle"></i>Profile</a></li>
                 <li><a href="dashboard.php"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
                 <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
-                <li><a href="monitor-examination.php" class="active"><i class="bi bi-activity"></i>Monitor Examination</a></li>
-                <li><a href="exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
-                <li><a href="monitor-examination.php"><i class="bi bi-people-fill"></i>Enrolled Trainees</a></li>
+                <li><a href="monitor-examination.php" class="active"><i class="bi bi-activity"></i>Monitor Examinations</a></li>
+                <li><a href="exams.php"><i class="bi bi-journal-text"></i>View Exams</a></li>
+                <li><a href="enrolled-trainees.php"><i class="bi bi-people-fill"></i>View Trainees</a></li>
                 <li><a href="reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
-                <li><a href="../masterfiles/audit-logs.php"><i class="bi bi-clock-history"></i>Audit Logs</a></li>
             </ul>
         </div>
 
@@ -66,7 +52,6 @@ $examId = isset($_GET['exam_id']) ? (int)$_GET['exam_id'] : 0;
             <div class="page-header">
                 <div>
                     <h2>Monitor Examination</h2>
-                    <p class="text-muted mb-0">Live tracking of trainees during active exams</p>
                 </div>
             </div>
 
@@ -111,7 +96,7 @@ $examId = isset($_GET['exam_id']) ? (int)$_GET['exam_id'] : 0;
                             </div>
                             <div class="flex-grow-1">
                                 <label class="form-label small mb-1" for="searchInput">Search trainee</label>
-                                <input type="text" id="searchInput" class="form-control form-control-sm" placeholder="Name or academic number...">
+                                <input type="text" id="searchInput" class="form-control form-control-sm" placeholder="Name or badge number...">
                             </div>
                         </div>
                         <div class="table-responsive">
@@ -120,13 +105,14 @@ $examId = isset($_GET['exam_id']) ? (int)$_GET['exam_id'] : 0;
                                     <tr>
                                         <th>Trainee</th>
                                         <th>Batch</th>
+                                        <th>Section</th>
                                         <th>Status</th>
                                         <th>Progress / Score</th>
                                         <th>Time Left</th>
                                     </tr>
                                 </thead>
                                 <tbody id="sessionsTableBody">
-                                    <tr><td colspan="5" class="text-center text-muted py-4">Loading...</td></tr>
+                                    <tr><td colspan="6" class="text-center text-muted py-4">Loading...</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -150,7 +136,7 @@ $examId = isset($_GET['exam_id']) ? (int)$_GET['exam_id'] : 0;
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/logout-handler.js?v=1"></script>
-    <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../js/ccmd/monitor-examination.js?v=9"></script>
+    <script src="../../assets/js/auto-logout.js?v=2"></script>
+    <script src="../../js/ccmd/monitor-examination.js?v=11"></script>
 </body>
 </html>

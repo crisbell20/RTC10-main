@@ -4,17 +4,7 @@ session_start();
 
 if (!isset($_SESSION['user_id']) || !in_array($_SESSION['user_role'] ?? '', ['Admin', 'CCMD'])) {
     http_response_code(403);
-    $role = $_SESSION['user_role'] ?? 'not set';
-    $userId = $_SESSION['user_id'] ?? 'not set';
-    echo json_encode([
-        'success' => false, 
-        'message' => 'Unauthorized. Required: Admin or CCMD. Current role: ' . $role,
-        'debug' => [
-            'user_id' => $userId,
-            'user_role' => $role,
-            'session_exists' => isset($_SESSION['user_id'])
-        ]
-    ]);
+    echo json_encode(['success' => false, 'message' => 'Unauthorized']);
     exit;
 }
 
@@ -26,9 +16,13 @@ $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
 $input = json_decode($rawInput, true) ?? [];
 $action = $_GET['action'] ?? ($input['action'] ?? '');
+$userRole = $_SESSION['user_role'] ?? '';
 
-// Debug logging
-error_log("exam-questions.php - Method: $request_method, Action: $action, Input: " . json_encode($input));
+if ($request_method === 'POST' && $userRole !== 'Admin') {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'message' => 'Forbidden: Admin access required']);
+    exit;
+}
 
 try {
     // Assign questions to an exam
@@ -108,7 +102,7 @@ try {
 
         if (empty($exam_id)) {
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Exam ID is required', 'debug' => ['exam_id' => $exam_id, 'get' => $_GET]]);
+            echo json_encode(['success' => false, 'message' => 'Exam ID is required']);
             exit;
         }
 
@@ -117,7 +111,7 @@ try {
         $stmt->execute([$exam_id]);
         if (!$stmt->fetch()) {
             http_response_code(404);
-            echo json_encode(['success' => false, 'message' => 'Exam not found', 'exam_id' => $exam_id]);
+            echo json_encode(['success' => false, 'message' => 'Exam not found']);
             exit;
         }
 
@@ -284,7 +278,8 @@ try {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
+    error_log('exam-questions.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }
 ?>

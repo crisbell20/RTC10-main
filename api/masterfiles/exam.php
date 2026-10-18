@@ -13,11 +13,19 @@ require_once __DIR__ . '/../includes/audit-log-utils.php';
 require_once __DIR__ . '/../includes/module-utils.php';
 require_once __DIR__ . '/../includes/question-publish-utils.php';
 require_once __DIR__ . '/../includes/archive-utils.php';
+require_once __DIR__ . '/../includes/person-name-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
 $rawInput = file_get_contents('php://input');
 $input = json_decode($rawInput, true) ?? [];
+$userRole = $_SESSION['user_role'] ?? '';
+
+if ($request_method !== 'GET' && $userRole !== 'Admin') {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'message' => 'Forbidden: Admin access required']);
+    exit;
+}
 
 try {
     // Add new question
@@ -260,8 +268,8 @@ try {
                 if ($default_subject_id) {
                     $subject_id = $default_subject_id;
                 } elseif (!empty($q['Subject'])) {
-                    $stmt = $pdo->prepare('SELECT Subject_ID FROM tbl_subject WHERE Subject_Name = ? OR Subject_Code = ? LIMIT 1');
-                    $stmt->execute([$q['Subject'], $q['Subject']]);
+                    $stmt = $pdo->prepare('SELECT Subject_ID FROM tbl_subject WHERE Subject_Name = ? LIMIT 1');
+                    $stmt->execute([$q['Subject']]);
                     $subject = $stmt->fetch(PDO::FETCH_ASSOC);
                     if (!$subject) {
                         $failed++;
@@ -536,11 +544,11 @@ try {
         $curriculum = subjectCurriculumJoin($pdo);
 
         $query = 'SELECT q.Question_ID, q.Subject_ID, q.Question_Text, q.Question_Type, q.Added_Date,
-                         s.Subject_Name, s.Subject_Code,
+                         s.Subject_Name,
                          ' . $curriculum['module_select'] . '
                          ' . $curriculum['course_id_select'] . ' AS Course_ID,
                          c.Course_Name,
-                         u.Fullname AS Created_By,
+                         ' . personNameSql('u') . ' AS Created_By,
                          (SELECT COUNT(DISTINCT eq.Exam_ID)
                           FROM tbl_exam_question eq
                           WHERE eq.Question_ID = q.Question_ID) AS exam_usage_count
@@ -577,6 +585,11 @@ try {
 
         $query .= publishedQuestionsWhereClause($pdo, 'q');
         $query .= ' AND ' . activeArchiveCondition($pdo, 'tbl_question_bank', 'q');
+        $query .= ' AND ' . activeArchiveCondition($pdo, 'tbl_subject', 's');
+        $query .= ' AND ' . activeArchiveCondition($pdo, 'tbl_course', 'c');
+        if (!empty($curriculum['module_filter'])) {
+            $query .= ' AND ' . activeArchiveCondition($pdo, 'tbl_module', 'm');
+        }
         $query .= ' ORDER BY c.Course_Name ASC, s.Subject_Name ASC, q.Added_Date DESC';
 
         $stmt = $pdo->prepare($query);
@@ -602,7 +615,8 @@ try {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
+    error_log('exam.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }
 ?>

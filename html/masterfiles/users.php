@@ -20,40 +20,22 @@ $userName = $_SESSION['user_name'] ?? 'User';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <?php require __DIR__ . '/../includes/sidebar-state-early.php'; ?>
     <title>Manage Users - PNP RTC X</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="../../assets/css/dashboard.css">
-    <style>
-        .sidebar-menu .menu-label {
-            display: block;
-            padding: 12px 20px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: #9ca3af;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 20px;
-            margin-bottom: 8px;
-            cursor: default;
-            pointer-events: none;
-        }
-        .sidebar-menu .menu-label i {
-            margin-right: 6px;
-            font-size: 0.8rem;
-            opacity: 0.6;
-        }
-    </style>
-</head>
+    <link rel="stylesheet" href="../../assets/css/dashboard.css?v=1">
+    <link rel="stylesheet" href="../../assets/css/staff-responsive.css?v=3">
+    </head>
 <body>
     <!-- Top Navigation -->
     <div class="top-nav">
-        <div class="nav-brand">
-            <h5>PNP Regional Training Center X</h5>
-            <p>User Management</p>
-        </div>
+        <?php
+        $navBrandSubtitle = 'User Management';
+        require __DIR__ . '/../includes/nav-brand.php';
+        ?>
         <div class="nav-user">
-            <span><?= $userName ?></span>
+            <span><?= htmlspecialchars($userName, ENT_QUOTES, 'UTF-8') ?></span>
             <button class="btn-logout" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
         </div>
     </div>
@@ -63,6 +45,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
         <!-- Sidebar -->
         <div class="sidebar">
             <ul class="sidebar-menu">
+                <li><a href="../admin/profile.php"><i class="bi bi-person-circle"></i>Profile</a></li>
                 <li><a href="../../html/admin/dashboard.php"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
                 <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
                 <li><a href="users.php" class="active"><i class="bi bi-people-fill"></i>Manage Users</a></li>
@@ -71,7 +54,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <li><a href="exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
                 <li><a href="question-bank.php"><i class="bi bi-folder"></i>Question Bank</a></li>
                 <li><a href="reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
-                <li><a href="../admin/cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
+                <li><a href="cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
                 <li><a href="archive.php"><i class="bi bi-archive"></i>Archive</a></li>
                 <li><a href="audit-logs.php"><i class="bi bi-clock-history"></i>Audit Logs</a></li>
                 <li><a href="settings.php"><i class="bi bi-gear"></i>System Settings</a></li>
@@ -86,7 +69,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     <h2>Manage Users</h2>
                     <div class="d-flex flex-wrap gap-2">
                         <button type="button" id="openBulkImportModalBtn" class="btn btn-outline">
-                            <i class="bi bi-upload me-2"></i>Import Examinees
+                            <i class="bi bi-upload me-2"></i>Import Trainees
                         </button>
                         <button type="button" id="openAddUserModalBtn" class="btn btn-add-user" data-bs-toggle="modal" data-bs-target="#addUserModal">
                             <i class="bi bi-plus-lg me-2"></i>Add New User
@@ -117,7 +100,6 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                 <option value="All">All</option>
                                 <option value="Active">Active</option>
                                 <option value="Inactive">Inactive</option>
-                                <option value="Suspended">Suspended</option>
                             </select>
                         </div>
                         <div class="ms-auto">
@@ -129,15 +111,15 @@ $userName = $_SESSION['user_name'] ?? 'User';
                         <table class="table">
                             <thead>
                                 <tr>
-                                    <th>Full Name</th>
+                                    <th>Name</th>
                                     <th>Email</th>
-                                    <th>Academic No.</th>
+                                    <th>Badge No.</th>
                                     <th>Personnel Rank</th>
                                     <th>Role</th>
                                     <th>Batch Assignment</th>
                                     <th>Status</th>
-                                    <th>Actions</th>
                                     <th>Date Created</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="usersTableBody">
@@ -165,8 +147,9 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <form id="assignBatchForm">
                     <input type="hidden" name="user_id" id="assignUserId">
                     <div class="modal-body">
+                        <div id="assignBatchFormAlert"></div>
                         <div id="assignEnrollmentWarning" class="alert alert-warning d-none small mb-3"></div>
-                        <p class="text-muted small">Each examinee can only belong to one course, batch, and section at a time.</p>
+                        <p class="text-muted small">Each trainee can only belong to one course, batch, and section at a time.</p>
                         <div class="mb-3">
                             <label class="form-label" for="assignCourseSelect">Course *</label>
                             <select class="form-select" id="assignCourseSelect" required>
@@ -195,20 +178,16 @@ $userName = $_SESSION['user_name'] ?? 'User';
         </div>
     </div>
 
-    <!-- Import Examinees Modal -->
+    <!-- Import Trainees Modal -->
     <div class="modal fade" id="bulkImportModal" tabindex="-1">
         <div class="modal-dialog modal-xl">
             <div class="modal-content">
                 <div class="modal-header">
-                    <h5 class="modal-title">Import Examinees</h5>
+                    <h5 class="modal-title">Import Trainees</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
-                    <p class="text-muted small mb-3">
-                        Upload file to create new examinee accounts and assign them to a section.
-                        Existing accounts will only be assigned if not yet assigned in the section.
-                    </p>
-                    <p class="text-muted small mb-3">Each examinee can only belong to one course, batch, and section. Existing assignments must be removed before reassigning.</p>
+                    <p class="text-muted small mb-3">Each trainee can only belong to one course, batch, and section. Existing assignments must be removed before reassigning.</p>
                     <div class="row g-3 mb-3">
                         <div class="col-md-4">
                             <label class="form-label" for="importCourseSelect">Course *</label>
@@ -229,18 +208,19 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             </select>
                         </div>
                     </div>
-                    <div class="d-flex flex-wrap align-items-end gap-2 mb-3">
-                        <div class="flex-grow-1">
-                            <label class="form-label" for="importFile">Excel File*</label>
-                            <input type="file" class="form-control" id="importFile" accept=".xlsx,.xls,.csv">
-                            <small class="text-muted">Columns: Fullname, Academic_Number (optional — auto-assigned if blank, format A001), Rank, Email</small>
+                    <div class="mb-3">
+                        <label class="form-label" for="importFile">Excel File *</label>
+                        <div class="d-flex flex-wrap align-items-center gap-2">
+                            <div class="flex-grow-1" style="min-width: 220px;">
+                                <input type="file" class="form-control" id="importFile" accept=".xlsx,.xls,.csv">
+                            </div>
+                            <button type="button" id="downloadImportTemplateBtn" class="btn btn-outline text-nowrap">
+                                <i class="bi bi-download me-1"></i>Download Template
+                            </button>
+                            <button type="button" id="previewImportBtn" class="btn btn-outline text-nowrap" disabled>
+                                <i class="bi bi-search me-1"></i>Preview
+                            </button>
                         </div>
-                        <button type="button" id="downloadImportTemplateBtn" class="btn btn-sm btn-outline">
-                            <i class="bi bi-download me-1"></i>Download Template
-                        </button>
-                        <button type="button" id="previewImportBtn" class="btn btn-sm btn-outline" disabled>
-                            <i class="bi bi-search me-1"></i>Preview
-                        </button>
                     </div>
                     <div id="importCapacityInfo" class="alert alert-info d-none py-2 small mb-3"></div>
                     <div id="importSummary" class="d-none mb-2 small"></div>
@@ -249,8 +229,8 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             <thead class="table-light sticky-top">
                                 <tr>
                                     <th>Row</th>
-                                    <th>Full Name</th>
-                                    <th>Academic No.</th>
+                                    <th>Name</th>
+                                    <th>Badge No.</th>
                                     <th>Rank</th>
                                     <th>Status</th>
                                     <th>Notes</th>
@@ -263,7 +243,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <div class="modal-footer">
                     <button type="button" class="btn btn-outline" data-bs-dismiss="modal">Cancel</button>
                     <button type="button" id="commitImportBtn" class="btn btn-add-user" disabled>
-                        <i class="bi bi-upload me-2"></i>Import Examinees
+                        <i class="bi bi-upload me-2"></i>Import Trainees
                     </button>
                 </div>
             </div>
@@ -283,24 +263,37 @@ $userName = $_SESSION['user_name'] ?? 'User';
                         <div id="addUserMessageAlert"></div>
                         <input type="hidden" id="editUserId" name="edit_user_id" value="">
                         <div class="mb-3">
-                            <label for="fullname" class="form-label">Full Name</label>
-                            <input type="text" class="form-control" id="fullname" name="fullname" 
-                                   pattern="[a-zA-Z\s.\-']+" 
-                                   minlength="2" 
+                            <label for="firstname" class="form-label">First Name</label>
+                            <input type="text" class="form-control" id="firstname" name="firstname"
+                                   minlength="2"
                                    maxlength="100"
-                                   title="Full name must contain only letters, spaces, dots, hyphens, and apostrophes"
+                                   title="First name must contain only letters, spaces, dots, commas, and hyphens"
                                    required>
-                            
                         </div>
-                        <div class="mb-3" id="academicNumberSection">
-                            <label for="academic_number" class="form-label">Academic Number <span id="academicRequiredMark" class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="academic_number" name="academic_number"
-                                   pattern="[A-Za-z][0-9]{3}"
-                                   minlength="4"
-                                   maxlength="4"
-                                   placeholder="e.g. A001"
-                                   title="One letter followed by 3 numbers (e.g. A001). Leave blank to auto-assign on save.">
-                            <small class="text-muted">Format: one letter + 3 numbers. Next available number is suggested; you may enter another valid unused number.</small>
+                        <div class="mb-3">
+                            <label for="lastname" class="form-label">Last Name</label>
+                            <input type="text" class="form-control" id="lastname" name="lastname"
+                                   minlength="2"
+                                   maxlength="100"
+                                   title="Last name must contain only letters, spaces, dots, commas, and hyphens"
+                                   required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="middlename" class="form-label">Middle Name <span class="text-muted">(optional)</span></label>
+                            <input type="text" class="form-control" id="middlename" name="middlename"
+                                   maxlength="100"
+                                   title="Middle name must contain only letters, spaces, dots, commas, and hyphens">
+                        </div>
+                        <div class="mb-3" id="badgeNumberSection">
+                            <label for="badge_number" class="form-label">Badge Number <span id="badgeRequiredMark" class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="badge_number" name="badge_number"
+                                   inputmode="numeric"
+                                   pattern="[0-9]{6,}"
+                                   minlength="6"
+                                   maxlength="20"
+                                   title="Badge number must be at least 6 digits"
+                                   placeholder="e.g. 123456">
+                            
                         </div>
                         <div class="mb-3" id="emailSection">
                             <label for="email" class="form-label">Email <span id="emailRequiredMark" class="text-danger">*</span></label>
@@ -338,13 +331,12 @@ $userName = $_SESSION['user_name'] ?? 'User';
                                 <select class="form-select" id="user_status" name="status">
                                     <option value="Active">Active</option>
                                     <option value="Inactive">Inactive</option>
-                                    <option value="Suspended">Suspended</option>
                                 </select>
                             </div>
                         </div>
-                        <div id="addUserEnrollmentSection" class="border rounded p-3 mb-2" style="display: none;">
+                        <div id="addUserEnrollmentSection" class="border rounded p-3 mb-2" data-validate-group="1" style="display: none;">
                             <label class="form-label fw-semibold">Section Assignment <span class="text-danger">*</span></label>
-                            <p class="text-muted small mb-2">Examinees must be assigned to a course, batch, and section when created.</p>
+                            <p class="text-muted small mb-2">Trainees must be assigned to a course, batch, and section when created.</p>
                             <div class="mb-2">
                                 <select class="form-select" id="addUserCourseSelect">
                                     <option value="">Select a course</option>
@@ -376,8 +368,9 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="../../assets/js/logout-handler.js?v=1"></script>
-    <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../assets/js/password-policy.js?v=2"></script>
-    <script src="../../js/masterfiles/users.js?v=13"></script>
+    <script src="../../assets/js/auto-logout.js?v=2"></script>
+    <script src="../../assets/js/password-policy.js?v=3"></script>
+    <script src="../../assets/js/modal-form-validation.js?v=1"></script>
+    <script src="../../js/masterfiles/users.js?v=30"></script>
 </body>
 </html>

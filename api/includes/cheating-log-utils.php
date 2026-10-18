@@ -1,20 +1,25 @@
 <?php
-/**
- * Helpers for proctoring / cheating log display and normalization.
- */
+
+// Helpers for proctoring
+// cheating log display
 
 function cheatingEventLabels(): array {
     return [
         'FULLSCREEN_EXIT' => 'Exited fullscreen',
-        'FULLSCREEN_DENIED' => 'Fullscreen not entered',
         'TAB_SWITCH' => 'Switched tab or window',
-        'WINDOW_BLUR' => 'Window lost focus',
         'VISIBILITY_HIDDEN' => 'Exam page hidden',
         'APP_BACKGROUND' => 'App moved to background',
         'COPY_ATTEMPT' => 'Copy attempt',
         'PASTE_ATTEMPT' => 'Paste attempt',
-        'CUT_ATTEMPT' => 'Cut attempt',
         'CONTEXT_MENU' => 'Right-click attempt',
+    ];
+}
+
+function cheatingLegacyEventLabels(): array {
+    return [
+        'FULLSCREEN_DENIED' => 'Fullscreen not entered',
+        'WINDOW_BLUR' => 'Window lost focus',
+        'CUT_ATTEMPT' => 'Cut attempt',
     ];
 }
 
@@ -26,27 +31,23 @@ function cheatingAllowedEventTypes(): array {
 function cheatingIncidentTriggerTypes(): array {
     return [
         'FULLSCREEN_EXIT',
-        'FULLSCREEN_DENIED',
         'TAB_SWITCH',
         'VISIBILITY_HIDDEN',
         'APP_BACKGROUND',
         'COPY_ATTEMPT',
         'PASTE_ATTEMPT',
-        'CUT_ATTEMPT',
         'CONTEXT_MENU',
     ];
 }
 
-/**
- * Split stored Type column into code + optional detail (legacy rows used "TYPE: detail").
- */
+
 function parseCheatingLogType(string $storedType): array {
     $storedType = trim($storedType);
     if ($storedType === '') {
         return ['code' => 'UNKNOWN', 'detail' => ''];
     }
 
-    $known = cheatingAllowedEventTypes();
+    $known = array_keys(cheatingEventLabels() + cheatingLegacyEventLabels());
     if (in_array($storedType, $known, true)) {
         return ['code' => $storedType, 'detail' => ''];
     }
@@ -73,11 +74,10 @@ function parseCheatingLogType(string $storedType): array {
 
 function formatCheatingEventLabel(string $storedType): string {
     $parsed = parseCheatingLogType($storedType);
-    $labels = cheatingEventLabels();
+    $labels = cheatingEventLabels() + cheatingLegacyEventLabels();
     return $labels[$parsed['code']] ?? $parsed['code'];
 }
 
-/** Proctor-facing one-line summary (legacy incident Reason strings supported). */
 function formatCheatingIncidentLatestLabel(string $reason): string {
     $reason = trim($reason);
     if ($reason === '') {
@@ -89,7 +89,7 @@ function formatCheatingIncidentLatestLabel(string $reason): string {
         $dashPos = strpos($latest, ' — ');
         if ($dashPos !== false) {
             $candidate = trim(substr($latest, 0, $dashPos));
-            $knownLabels = array_values(cheatingEventLabels());
+            $knownLabels = array_values(cheatingEventLabels() + cheatingLegacyEventLabels());
             if (in_array($candidate, $knownLabels, true)) {
                 return $candidate;
             }
@@ -100,12 +100,12 @@ function formatCheatingIncidentLatestLabel(string $reason): string {
     return $reason;
 }
 
-function formatCheatingProctorLine(string $academicNumber, string $fullname, string $eventLabel): string {
-    $academic = trim($academicNumber) !== '' ? trim($academicNumber) : '—';
+function formatCheatingProctorLine(string $badgeNumber, string $fullname, string $eventLabel): string {
+    $badge = trim($badgeNumber) !== '' ? trim($badgeNumber) : '—';
     $name = trim($fullname) !== '' ? trim($fullname) : 'Trainee';
     $label = trim($eventLabel) !== '' ? trim($eventLabel) : 'Suspicious activity';
 
-    return $academic . ', ' . $name . ' — ' . $label;
+    return $badge . ', ' . $name . ' — ' . $label;
 }
 
 function enrichCheatingLogRow(array $row): array {
@@ -132,4 +132,43 @@ function cheatingIncidentTableExists(PDO $pdo): bool {
     } catch (Exception $e) {
         return false;
     }
+}
+
+function userBatchTableExists(PDO $pdo): bool {
+    try {
+        $stmt = $pdo->query("SHOW TABLES LIKE 'tbl_user_batch'");
+        return $stmt && $stmt->rowCount() > 0;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function cheatingTraineeBatchNameSql(string $userAlias = 'u', string $courseAlias = 'c'): string {
+    return "(
+        SELECT COALESCE(pb.Batch_Name, b.Batch_Name)
+        FROM tbl_user_batch ub
+        INNER JOIN tbl_batch b ON ub.Batch_ID = b.Batch_ID
+        LEFT JOIN tbl_academic_section s ON b.Section_ID = s.Section_ID
+        LEFT JOIN tbl_batch pb ON s.Batch_ID = pb.Batch_ID
+        WHERE ub.User_ID = {$userAlias}.User_ID
+          AND ub.Status = 'Active'
+          AND b.Course_ID = {$courseAlias}.Course_ID
+        ORDER BY ub.Date_Enrolled DESC
+        LIMIT 1
+    )";
+}
+
+
+function cheatingTraineeSectionNameSql(string $userAlias = 'u', string $courseAlias = 'c'): string {
+    return "(
+        SELECT s.Section_Name
+        FROM tbl_user_batch ub
+        INNER JOIN tbl_batch b ON ub.Batch_ID = b.Batch_ID
+        LEFT JOIN tbl_academic_section s ON b.Section_ID = s.Section_ID
+        WHERE ub.User_ID = {$userAlias}.User_ID
+          AND ub.Status = 'Active'
+          AND b.Course_ID = {$courseAlias}.Course_ID
+        ORDER BY ub.Date_Enrolled DESC
+        LIMIT 1
+    )";
 }

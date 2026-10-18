@@ -6,7 +6,7 @@
 -- 2. tbl_exam_batch - Links exams to batches for deployment
 --
 -- NOTE: User enrollment is handled via tbl_user_batch junction table.
--- Run scripts/migrations/restore_user_batch.sql to create or restore it.
+-- If that table is missing, import scripts/migrations/restore_user_batch.sql via the MySQL CLI.
 --
 -- Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10
 -- ============================================================================

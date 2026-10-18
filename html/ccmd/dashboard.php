@@ -20,40 +20,22 @@ $userName = $_SESSION['user_name'] ?? 'User';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <?php require __DIR__ . '/../includes/sidebar-state-early.php'; ?>
     <title>CCMD Dashboard - PNP RTC X</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="../../assets/css/dashboard.css">
-    <style>
-        .sidebar-menu .menu-label {
-            display: block;
-            padding: 12px 20px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: #9ca3af;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 20px;
-            margin-bottom: 8px;
-            cursor: default;
-            pointer-events: none;
-        }
-        .sidebar-menu .menu-label i {
-            margin-right: 6px;
-            font-size: 0.8rem;
-            opacity: 0.6;
-        }
-    </style>
-</head>
+    <link rel="stylesheet" href="../../assets/css/dashboard.css?v=1">
+    <link rel="stylesheet" href="../../assets/css/staff-responsive.css?v=3">
+    </head>
 <body>
     <!-- Top Navigation -->
     <div class="top-nav">
-        <div class="nav-brand">
-            <h5>PNP Regional Training Center X</h5>
-            <p>Career Course Management Division</p>
-        </div>
+        <?php
+        $navBrandSubtitle = 'Chief of Curriculum Management Division';
+        require __DIR__ . '/../includes/nav-brand.php';
+        ?>
         <div class="nav-user">
-            <span><?= $userName ?></span>
+            <span><?= htmlspecialchars($userName, ENT_QUOTES, 'UTF-8') ?></span>
             <button class="btn-logout" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
         </div>
     </div>
@@ -63,13 +45,13 @@ $userName = $_SESSION['user_name'] ?? 'User';
         <!-- Sidebar -->
         <div class="sidebar">
             <ul class="sidebar-menu">
+                <li><a href="profile.php"><i class="bi bi-person-circle"></i>Profile</a></li>
                 <li><a href="dashboard.php" class="active"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
                 <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
-                <li><a href="monitor-examination.php"><i class="bi bi-activity"></i>Monitor Examination</a></li>
-                <li><a href="../ccmd/exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
-                <li><a href="monitor-examination.php"><i class="bi bi-people-fill"></i>Enrolled Trainees</a></li>
+                <li><a href="monitor-examination.php"><i class="bi bi-activity"></i>Monitor Examinations</a></li>
+                <li><a href="../ccmd/exams.php"><i class="bi bi-journal-text"></i>View Exams</a></li>
+                <li><a href="enrolled-trainees.php"><i class="bi bi-people-fill"></i>View Trainees</a></li>
                 <li><a href="reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
-                <li><a href=""><i class="bi bi-clock-history"></i>Audit Logs</a></li>
             </ul>
         </div>
 
@@ -100,29 +82,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     </div>
                     <div class="stat-value">142</div>
                     <div class="stat-footer">
-                        <span class="trend-up">+12%</span>
-                    </div>
-                </div>
-
-                <div class="stat-card red">
-                    <div class="stat-header">
-                        <div class="stat-label">Completed Today</div>
-                        <div class="stat-icon icon-red"><i class="bi bi-check2-circle"></i></div>
-                    </div>
-                    <div class="stat-value" id="completedToday">--</div>
-                    <div class="stat-footer">
-                        <span>Sessions finished today</span>
-                    </div>
-                </div>
-
-                <div class="stat-card purple">
-                    <div class="stat-header">
-                        <div class="stat-label">Published Exams</div>
-                        <div class="stat-icon icon-purple"><i class="bi bi-journal-check"></i></div>
-                    </div>
-                    <div class="stat-value" id="publishedExams">--</div>
-                    <div class="stat-footer">
-                        <span>Available for monitoring</span>
+                        <span class="trend-up">Currently taking exams</span>
                     </div>
                 </div>
             </div>
@@ -137,7 +97,8 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     </div>
                 </div>
                 <div class="section-body">
-                    <table class="table">
+                    <div class="table-responsive">
+                    <table class="table text-nowrap">
                         <thead>
                             <tr>
                                 <th>Exam Name</th>
@@ -152,6 +113,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             <!-- Data populated from database -->
                         </tbody>
                     </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -161,7 +123,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/logout-handler.js?v=1"></script>
-    <script src="../../assets/js/auto-logout.js"></script>
+    <script src="../../assets/js/auto-logout.js?v=2"></script>
     <script src="../../js/ccmd/ccmd-dashboard.js"></script>
 </body>
 </html>

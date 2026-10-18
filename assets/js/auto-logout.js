@@ -1,18 +1,18 @@
 /**
  * Auto Logout on Inactivity
- * Logs out user after 5 minutes of inactivity
+ * Timeout comes from System Settings (Security Policy).
  */
 
 (function() {
-    // Configuration
-    const INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
-    const WARNING_TIME = 30 * 1000; // Show warning 30 seconds before logout
-    
+    const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+    const WARNING_TIME = 30 * 1000;
+    const SESSION_POLICY_URL = '../../api/auth/session-policy.php';
+
+    let inactivityTimeoutMs = DEFAULT_TIMEOUT_MS;
     let inactivityTimer;
     let warningTimer;
     let warningShown = false;
 
-    // Events that reset the inactivity timer
     const activityEvents = [
         'mousedown',
         'mousemove',
@@ -22,51 +22,43 @@
         'click'
     ];
 
-    // Reset the inactivity timer
     function resetTimer() {
-        // Clear existing timers
         clearTimeout(inactivityTimer);
         clearTimeout(warningTimer);
         warningShown = false;
 
-        // Set warning timer (30 seconds before logout)
-        warningTimer = setTimeout(showWarning, INACTIVITY_TIMEOUT - WARNING_TIME);
-
-        // Set logout timer
-        inactivityTimer = setTimeout(logout, INACTIVITY_TIMEOUT);
+        const warningDelay = Math.max(0, inactivityTimeoutMs - WARNING_TIME);
+        warningTimer = setTimeout(showWarning, warningDelay);
+        inactivityTimer = setTimeout(logout, inactivityTimeoutMs);
     }
 
-    // Show warning before logout
     function showWarning() {
         if (warningShown) return;
         warningShown = true;
 
-        // Check if SweetAlert2 is available
+        const warningSeconds = Math.max(1, Math.round(Math.min(WARNING_TIME, inactivityTimeoutMs) / 1000));
+
         if (typeof Swal !== 'undefined') {
             Swal.fire({
                 title: 'Session Timeout Warning',
-                text: 'You will be logged out in 30 seconds due to inactivity. Move your mouse or press any key to stay logged in.',
+                text: `You will be logged out in ${warningSeconds} seconds due to inactivity. Move your mouse or press any key to stay logged in.`,
                 icon: 'warning',
-                timer: 30000,
+                timer: warningSeconds * 1000,
                 timerProgressBar: true,
                 showConfirmButton: true,
                 confirmButtonText: 'Stay Logged In',
                 allowOutsideClick: false
             }).then((result) => {
                 if (result.isConfirmed || result.dismiss === Swal.DismissReason.timer) {
-                    // If user clicked or timer expired, check if they're still inactive
                     if (result.dismiss === Swal.DismissReason.timer) {
-                        // Timer expired, logout
                         logout();
                     } else {
-                        // User clicked, reset timer
                         resetTimer();
                     }
                 }
             });
         } else {
-            // Fallback to native alert if SweetAlert2 is not available
-            const stayLoggedIn = confirm('You will be logged out in 30 seconds due to inactivity. Click OK to stay logged in.');
+            const stayLoggedIn = confirm(`You will be logged out in ${warningSeconds} seconds due to inactivity. Click OK to stay logged in.`);
             if (stayLoggedIn) {
                 resetTimer();
             }
@@ -85,9 +77,7 @@
             });
     }
 
-    // Logout function
     function logout() {
-        // Show logout message
         if (typeof Swal !== 'undefined') {
             Swal.fire({
                 title: 'Session Expired',
@@ -106,20 +96,44 @@
         }
     }
 
-    // Initialize auto-logout
-    function init() {
-        // Set up event listeners for user activity
+    async function loadIdleTimeoutMs() {
+        try {
+            const res = await fetch(SESSION_POLICY_URL, { credentials: 'same-origin' });
+            const data = await res.json();
+            const minutes = parseInt(data?.data?.idle_timeout_minutes, 10);
+            if (res.ok && data.success && minutes > 0) {
+                return minutes * 60 * 1000;
+            }
+        } catch (error) {
+            // Keep the default timeout if the policy cannot be loaded.
+        }
+        return DEFAULT_TIMEOUT_MS;
+    }
+
+    async function init() {
+        inactivityTimeoutMs = await loadIdleTimeoutMs();
+
         activityEvents.forEach(event => {
             document.addEventListener(event, resetTimer, true);
         });
 
-        // Start the timer
         resetTimer();
 
-        console.log('Auto-logout initialized: 5 minutes inactivity timeout');
+        window.addEventListener('pageshow', (event) => {
+            if (event.persisted) {
+                resetTimer();
+            }
+        });
+
+        window.addEventListener('pagehide', (event) => {
+            if (event.persisted) {
+                clearTimeout(inactivityTimer);
+                clearTimeout(warningTimer);
+                warningShown = false;
+            }
+        });
     }
 
-    // Initialize when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {

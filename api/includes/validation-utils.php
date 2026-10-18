@@ -40,6 +40,22 @@ function normalizeEntityName(?string $name): string
     return strtolower(trim((string)$name));
 }
 
+function validateFullname(?string $fullname): ?string
+{
+    $fullname = trim((string)$fullname);
+    if ($fullname === '') {
+        return 'Full name is required';
+    }
+    if (!preg_match('/^[\p{L}\s.,\-]+$/u', $fullname)) {
+        return 'Full name must contain only letters, spaces, dots, commas, and hyphens';
+    }
+    if (strlen($fullname) < 2 || strlen($fullname) > 100) {
+        return 'Full name must be between 2 and 100 characters';
+    }
+
+    return null;
+}
+
 function courseNameExists(PDO $pdo, string $courseName, ?int $excludeCourseId = null): bool
 {
     $sql = 'SELECT Course_ID FROM tbl_course WHERE LOWER(TRIM(Course_Name)) = ?';
@@ -75,6 +91,153 @@ function batchNameExistsInCourse(PDO $pdo, int $courseId, string $batchName, ?in
     $stmt->execute($params);
 
     return (bool)$stmt->fetch();
+}
+
+function currentCourseBatchYear(): int
+{
+    return (int)date('Y');
+}
+
+function formatCourseBatchName(string $courseName, int $year, int $sequence): string
+{
+    $sequence = max(1, $sequence);
+
+    return trim($courseName) . ' ' . $year . '-' . str_pad((string)$sequence, 2, '0', STR_PAD_LEFT);
+}
+
+/**
+ * Highest COURSE YYYY-NN sequence already stored for this course and year.
+ * Includes archived course batches. Ignores section enrollment batches and
+ * names that do not match the pattern. Pass $lockRows only inside a transaction
+ * that already holds the course row, so the read sees the latest committed names.
+ */
+function highestCourseBatchSequence(PDO $pdo, int $courseId, string $courseName, int $year, bool $lockRows = false): int
+{
+    $courseName = trim($courseName);
+    if ($courseId <= 0 || $courseName === '' || $year <= 0) {
+        return 0;
+    }
+
+    $pattern = '/^' . preg_quote($courseName, '/') . ' (\d{4})-(\d+)$/i';
+    $sql = '
+        SELECT Batch_Name
+        FROM tbl_batch
+        WHERE Course_ID = ?
+          AND (Section_ID IS NULL OR Section_ID = 0)
+    ';
+    if ($lockRows) {
+        $sql .= ' FOR UPDATE';
+    }
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$courseId]);
+
+    $highest = 0;
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $batchName) {
+        if (!preg_match($pattern, trim((string)$batchName), $matches)) {
+            continue;
+        }
+        if ((int)$matches[1] !== $year) {
+            continue;
+        }
+        $sequence = (int)$matches[2];
+        if ($sequence > $highest) {
+            $highest = $sequence;
+        }
+    }
+
+    return $highest;
+}
+
+/**
+ * Next unused course-batch name for the current calendar year.
+ * The caller must already have locked the course row when $lockRows is true.
+ */
+function nextCourseBatchName(PDO $pdo, int $courseId, string $courseName, bool $lockRows = false): ?string
+{
+    $courseName = trim($courseName);
+    if ($courseName === '') {
+        return null;
+    }
+
+    $year = currentCourseBatchYear();
+    $sequence = highestCourseBatchSequence($pdo, $courseId, $courseName, $year, $lockRows) + 1;
+
+    for ($attempt = 0; $attempt < 1000; $attempt++) {
+        $candidate = formatCourseBatchName($courseName, $year, $sequence);
+        if (!batchNameExistsInCourse($pdo, $courseId, $candidate)) {
+            return $candidate;
+        }
+        $sequence++;
+    }
+
+    return null;
+}
+
+function predefinedSectionNames(): array
+{
+    return [
+        'Alpha',
+        'Bravo',
+        'Charlie',
+        'Delta',
+        'Echo',
+        'Foxtrot',
+        'Golf',
+        'Hotel',
+        'India',
+        'Juliet',
+        'Kilo',
+        'Lima',
+        'Mike',
+        'November',
+        'Oscar',
+        'Papa',
+        'Quebec',
+        'Romeo',
+        'Sierra',
+        'Tango',
+        'Uniform',
+        'Victor',
+        'Whiskey',
+        'X-ray',
+        'Yankee',
+        'Zulu',
+    ];
+}
+
+function canonicalPredefinedSectionName(string $sectionName): ?string
+{
+    $normalized = normalizeEntityName($sectionName);
+    if ($normalized === '') {
+        return null;
+    }
+
+    foreach (predefinedSectionNames() as $allowed) {
+        if (normalizeEntityName($allowed) === $normalized) {
+            return $allowed;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Name to store. The current stored name is kept as-is, including names outside
+ * the phonetic list. Any change must be one of the allowed names.
+ */
+function resolveSectionNameForSave(string $submitted, ?string $currentStored = null): ?string
+{
+    $submitted = trim($submitted);
+    if ($submitted === '') {
+        return null;
+    }
+
+    if ($currentStored !== null && normalizeEntityName($submitted) === normalizeEntityName($currentStored)) {
+        return $currentStored;
+    }
+
+    return canonicalPredefinedSectionName($submitted);
 }
 
 function sectionNameExistsInBatch(PDO $pdo, int $batchId, string $sectionName, ?int $excludeSectionId = null): bool
@@ -138,6 +301,9 @@ function loadActiveExamSessionContext(PDO $pdo, int $sessionId, int $userId): ar
             es.User_ID,
             es.Time_Started,
             es.Time_Ended,
+            es.Cheating_Locked,
+            es.Cheating_Locked_At,
+            es.Cheating_Unlocked_At,
             e.Title,
             e.Status,
             e.Schedule_Date,
@@ -181,17 +347,10 @@ function loadActiveExamSessionContext(PDO $pdo, int $sessionId, int $userId): ar
         return ['valid' => false, 'message' => $deadlineError, 'status' => 403];
     }
 
-    $examId = (int)$session['Exam_ID'];
     $duration = (int)($session['Duration'] ?? 0);
-    $timeStarted = reviveExpiredEmptySession(
-        $pdo,
-        $sessionId,
-        $examId,
-        $session['Time_Started'],
-        $duration
-    );
+    $timeStarted = $session['Time_Started'];
 
-    if (isSessionDurationExpired($timeStarted, $duration)) {
+    if (finalizeSessionIfDurationExpired($pdo, $sessionId, $timeStarted, $duration)) {
         return ['valid' => false, 'message' => 'Exam time has expired', 'status' => 403];
     }
 
@@ -200,6 +359,53 @@ function loadActiveExamSessionContext(PDO $pdo, int $sessionId, int $userId): ar
         'session' => $session,
         'exam' => $session,
         'time_started' => $timeStarted,
+    ];
+}
+
+/**
+ * Load a session the examinee may complete (manual or auto-submit after the timer).
+ * Duration expiry and exam deadline do not block submit; already-ended sessions are allowed.
+ *
+ * @return array{valid:bool, message?:string, status?:int, session?:array}
+ */
+function loadExamSessionForSubmit(PDO $pdo, int $sessionId, int $userId): array
+{
+    $stmt = $pdo->prepare('
+        SELECT
+            es.Session_ID,
+            es.Exam_ID,
+            es.User_ID,
+            es.Time_Started,
+            es.Time_Ended,
+            es.Cheating_Locked,
+            es.Cheating_Locked_At,
+            es.Cheating_Unlocked_At,
+            e.Title,
+            e.Status,
+            e.Duration,
+            e.Is_Archived
+        FROM tbl_exam_session es
+        INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
+        WHERE es.Session_ID = ?
+    ');
+    $stmt->execute([$sessionId]);
+    $session = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$session) {
+        return ['valid' => false, 'message' => 'Invalid session', 'status' => 404];
+    }
+
+    if ((int)$session['User_ID'] !== $userId) {
+        return ['valid' => false, 'message' => 'Invalid session', 'status' => 403];
+    }
+
+    if (!empty($session['Is_Archived'])) {
+        return ['valid' => false, 'message' => 'This exam is no longer available', 'status' => 403];
+    }
+
+    return [
+        'valid' => true,
+        'session' => $session,
     ];
 }
 
@@ -302,7 +508,12 @@ function batchHasActiveSections(PDO $pdo, int $batchId): int
 
 function subjectHasLinkedExams(PDO $pdo, int $subjectId): int
 {
-    $stmt = $pdo->prepare('SELECT COUNT(*) FROM tbl_exam WHERE Subject_ID = ?');
+    if (!function_exists('activeArchiveCondition')) {
+        require_once __DIR__ . '/archive-utils.php';
+    }
+
+    $active = activeArchiveCondition($pdo, 'tbl_exam');
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM tbl_exam WHERE Subject_ID = ? AND {$active}");
     $stmt->execute([$subjectId]);
 
     return (int)$stmt->fetchColumn();

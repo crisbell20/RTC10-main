@@ -1,4 +1,8 @@
 <?php
+
+// Authentication - Change Password API
+// Password changes and first-login password change 
+
 header('Content-Type: application/json');
 session_start();
 
@@ -15,15 +19,16 @@ require_once __DIR__ . '/../includes/password-utils.php';
 $input = json_decode(file_get_contents('php://input'), true) ?? [];
 $action = trim((string)($input['action'] ?? ''));
 
+// Dismiss password change prompt
 if ($action === 'dismiss_must_change') {
     if (($_SESSION['user_role'] ?? '') !== 'Examinee') {
         http_response_code(403);
-        echo json_encode(['success' => false, 'message' => 'Only examinees may dismiss the password change prompt']);
+        echo json_encode(['success' => false, 'message' => 'Only trainees may dismiss the password change prompt']);
         exit;
     }
 
     try {
-        $stmt = $pdo->prepare('SELECT User_ID, Fullname, Must_Change_Password FROM tbl_user WHERE User_ID = ? LIMIT 1');
+        $stmt = $pdo->prepare('SELECT User_ID, Must_Change_Password FROM tbl_user WHERE User_ID = ? LIMIT 1');
         $stmt->execute([(int)$_SESSION['user_id']]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -43,12 +48,12 @@ if ($action === 'dismiss_must_change') {
         $update->execute([(int)$user['User_ID']]);
 
         $_SESSION['must_change_password'] = 0;
-
+        // Audit log
         auditFromSession(
             $pdo,
             'AUTH',
             'PASSWORD_CHANGE_DISMISSED',
-            "{$user['Fullname']} dismissed first-login password change",
+            'Dismissed first-login password change',
             'SUCCESS',
             'user',
             (int)$user['User_ID']
@@ -56,28 +61,30 @@ if ($action === 'dismiss_must_change') {
 
         echo json_encode(['success' => true, 'message' => 'You can change your password later from your profile.']);
     } catch (Exception $e) {
+        error_log('change-password.php dismiss error: ' . $e->getMessage());
         http_response_code(500);
-        echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+        echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
     }
     exit;
 }
 
+// Password input
 $currentPassword = $input['current_password'] ?? '';
 $newPassword = $input['new_password'] ?? '';
 $confirmPassword = $input['confirm_password'] ?? '';
-
+// Validate input
 if (empty($currentPassword) || empty($newPassword) || empty($confirmPassword)) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'All password fields are required']);
     exit;
 }
-
+// Check new password and confirm password match
 if ($newPassword !== $confirmPassword) {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'New password and confirmation do not match']);
     exit;
 }
-
+// Validate password policy
 $passwordError = validatePasswordPolicy($newPassword);
 if ($passwordError !== null) {
     http_response_code(400);
@@ -85,8 +92,9 @@ if ($passwordError !== null) {
     exit;
 }
 
+// Verify current password
 try {
-    $stmt = $pdo->prepare('SELECT User_ID, Fullname, Password_Hash FROM tbl_user WHERE User_ID = ?');
+    $stmt = $pdo->prepare('SELECT User_ID, Password_Hash FROM tbl_user WHERE User_ID = ?');
     $stmt->execute([$_SESSION['user_id']]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -114,11 +122,12 @@ try {
 
     $_SESSION['must_change_password'] = 0;
 
-    auditFromSession($pdo, 'AUTH', 'PASSWORD_CHANGE', "{$user['Fullname']} changed password", 'SUCCESS', 'user', (int)$user['User_ID']);
+    auditFromSession($pdo, 'AUTH', 'PASSWORD_CHANGE', 'Changed password', 'SUCCESS', 'user', (int)$user['User_ID']);
 
     http_response_code(200);
     echo json_encode(['success' => true, 'message' => 'Password updated successfully']);
 } catch (Exception $e) {
+    error_log('change-password.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }

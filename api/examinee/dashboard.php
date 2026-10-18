@@ -1,21 +1,19 @@
 <?php
-/**
- * Examinee Dashboard API
- * Provides statistics, available exams, and recent results for authenticated examinees
- */
+
+// Examinee - Dashboard API
+// Provides statistics, available exams, and recent results
 
 header('Content-Type: application/json');
 session_start();
 
 require_once '../config/connection-pdo.php';
+/** @var PDO $pdo */
 require_once '../includes/exam-code-utils.php';
 require_once '../includes/exam-participant-utils.php';
 require_once '../includes/validation-utils.php';
 require_once '../includes/exam-deadline-finalize-utils.php';
+require_once '../includes/archive-utils.php';
 
-/**
- * Send success response
- */
 function sendSuccess($data) {
     http_response_code(200);
     echo json_encode([
@@ -25,9 +23,6 @@ function sendSuccess($data) {
     exit;
 }
 
-/**
- * Send error response
- */
 function sendError($message, $statusCode = 400) {
     http_response_code($statusCode);
     echo json_encode([
@@ -37,9 +32,6 @@ function sendError($message, $statusCode = 400) {
     exit;
 }
 
-/**
- * Validate session and examinee role
- */
 function validateExamineeSession() {
     // Check if session exists
     if (!isset($_SESSION['user_id'])) {
@@ -48,7 +40,7 @@ function validateExamineeSession() {
     
     // Check if user is an examinee
     if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'Examinee') {
-        sendError('Access denied. This resource is only available to examinees.', 403);
+        sendError('Access denied. This resource is only available to trainees.', 403);
     }
     
     return $_SESSION['user_id'];
@@ -99,66 +91,92 @@ try {
     sendError('An error occurred while processing your request', 500);
 }
 
-/**
- * Get dashboard statistics
- */
+// Get dashboard statistics
 function getDashboardStatistics($pdo, $userId) {
-    // Count available exams (Published, not completed by user)
+    $curriculumActive = examineeActiveCurriculumCondition($pdo, 'e', 's', 'c', 'b');
+
+    // Count available exams
+    $availableGate = buildAvailableExamAttemptGate($pdo);
     $availableQuery = "
         SELECT COUNT(DISTINCT e.Exam_ID) as count
         FROM tbl_exam e
+        INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
+        INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
         INNER JOIN tbl_exam_batch eb ON e.Exam_ID = eb.Exam_ID
         INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
         INNER JOIN tbl_user_batch ub ON b.Batch_ID = ub.Batch_ID
         WHERE e.Status = 'Published'
+        AND {$curriculumActive}
         AND ub.User_ID = ?
         AND ub.Status = 'Active'
-        AND NOT EXISTS (
-            SELECT 1
-            FROM tbl_exam_session es_done
-            INNER JOIN tbl_result r ON r.Session_ID = es_done.Session_ID
-            WHERE es_done.Exam_ID = e.Exam_ID
-              AND es_done.User_ID = ?
-              AND es_done.Time_Ended IS NOT NULL
-        )
+        {$availableGate['sql']}
     ";
+    $availableParams = array_fill(0, 1 + $availableGate['param_count'], $userId);
     $stmt = $pdo->prepare($availableQuery);
-    $stmt->execute([$userId, $userId]);
+    $stmt->execute($availableParams);
     $availableCount = $stmt->fetch()['count'] ?? 0;
     
     // Count completed exams
+    $activeExam = activeArchiveCondition($pdo, 'tbl_exam', 'e');
+    $activeSubject = activeArchiveCondition($pdo, 'tbl_subject', 's');
+    $activeCourse = activeArchiveCondition($pdo, 'tbl_course', 'c');
     $completedQuery = "
-        SELECT COUNT(DISTINCT es.Session_ID) as count
+        SELECT COUNT(DISTINCT es.Exam_ID) as count
         FROM tbl_exam_session es
+        INNER JOIN tbl_result r ON r.Session_ID = es.Session_ID
+        INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
+        INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
+        INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
         WHERE es.User_ID = ?
-        AND es.Time_Ended IS NOT NULL
+        AND " . finishedSittingPredicateSql('es') . "
+        AND {$activeExam}
+        AND {$activeSubject}
+        AND {$activeCourse}
     ";
     $stmt = $pdo->prepare($completedQuery);
     $stmt->execute([$userId]);
     $completedCount = $stmt->fetch()['count'] ?? 0;
     
-    // Calculate average score and pass/fail counts
+    // Get exam scores
     $scoresQuery = "
-        SELECT 
-            AVG(r.Percentage) as avg_score,
-            SUM(CASE WHEN r.Percentage >= e.Passing_Score THEN 1 ELSE 0 END) AS passed_count,
-            SUM(CASE WHEN r.Percentage < e.Passing_Score THEN 1 ELSE 0 END) AS failed_count
+        SELECT
+            r.Score,
+            e.Passing_Score,
+            (SELECT COUNT(*) FROM tbl_exam_question eq WHERE eq.Exam_ID = e.Exam_ID) AS total_questions
         FROM tbl_result r
         INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
         INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
+        INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
+        INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
         WHERE es.User_ID = ?
-        AND es.Time_Ended IS NOT NULL
+        AND " . latestFinishedResultMatchSql('es', 'r') . "
         AND r.Percentage IS NOT NULL
+        AND {$activeExam}
+        AND {$activeSubject}
+        AND {$activeCourse}
     ";
     $stmt = $pdo->prepare($scoresQuery);
     $stmt->execute([$userId]);
-    $scores = $stmt->fetch();
+    $scoreRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $gradeScores = [];
+    $passedCount = 0;
+    $failedCount = 0;
+    foreach ($scoreRows as $row) {
+        $grade = examineeGradeScoreFromRow($row);
+        $gradeScores[] = $grade;
+        if (examineePassedOnGradeScale($row)) {
+            $passedCount++;
+        } else {
+            $failedCount++;
+        }
+    }
+
+    // Calculate average score
+    $averageScore = count($gradeScores) > 0
+        ? round(array_sum($gradeScores) / count($gradeScores), 1)
+        : 0;
     
-    $averageScore = $scores['avg_score'] ?? 0;
-    $passedCount = (int)($scores['passed_count'] ?? 0);
-    $failedCount = (int)($scores['failed_count'] ?? 0);
-    
-    // Format response
     $statistics = [
         'exams_available' => (int)$availableCount,
         'exams_completed' => (int)$completedCount,
@@ -173,9 +191,7 @@ function getDashboardStatistics($pdo, $userId) {
     sendSuccess($statistics);
 }
 
-/**
- * Get available exams
- */
+// Get available exams
 function getAvailableExams($pdo, $userId) {
     $hasExamCode = false;
     try {
@@ -186,9 +202,11 @@ function getAvailableExams($pdo, $userId) {
     }
 
     $codeSelect = $hasExamCode ? 'e.Exam_Code,' : '';
-    $archivedFilter = $hasExamCode ? 'AND (e.Is_Archived = 0 OR e.Is_Archived IS NULL)' : '';
+    $curriculumActive = examineeActiveCurriculumCondition($pdo, 'e', 's', 'c', 'b');
     $participantFilter = '';
-    $queryParams = [$userId, $userId, $userId];
+    $availableGate = buildAvailableExamAttemptGate($pdo);
+    $availableGateSql = $availableGate['sql'];
+    $queryParams = [$userId, $userId];
 
     if (examParticipantTableExists($pdo)) {
         $participantFilter = "
@@ -199,6 +217,9 @@ function getAvailableExams($pdo, $userId) {
                 WHERE ep_user.Exam_ID = e.Exam_ID AND ep_user.User_ID = ?
             )
         )";
+        $queryParams[] = $userId;
+    }
+    for ($gateParam = 0; $gateParam < $availableGate['param_count']; $gateParam++) {
         $queryParams[] = $userId;
     }
 
@@ -226,18 +247,11 @@ function getAvailableExams($pdo, $userId) {
         LEFT JOIN tbl_exam_question eq ON e.Exam_ID = eq.Exam_ID
         LEFT JOIN tbl_exam_session es ON e.Exam_ID = es.Exam_ID AND es.User_ID = ? AND es.Time_Ended IS NULL
         WHERE e.Status = 'Published'
-        {$archivedFilter}
+        AND {$curriculumActive}
         AND ub.User_ID = ?
         AND ub.Status = 'Active'
         {$participantFilter}
-        AND NOT EXISTS (
-            SELECT 1
-            FROM tbl_exam_session es_done
-            INNER JOIN tbl_result r ON r.Session_ID = es_done.Session_ID
-            WHERE es_done.Exam_ID = e.Exam_ID
-              AND es_done.User_ID = ?
-              AND es_done.Time_Ended IS NOT NULL
-        )
+        {$availableGateSql}
         GROUP BY e.Exam_ID
         ORDER BY e.Deadline ASC, e.Schedule_Date ASC
     ";
@@ -287,6 +301,7 @@ function getAvailableExams($pdo, $userId) {
 function getRecentResults($pdo, $userId) {
     $hasResponseReview = responseReviewColumnExists($pdo);
     $reviewSelect = $hasResponseReview ? 'e.Allow_Response_Review,' : '';
+    $activeCurriculum = examineeActiveResultCurriculumCondition($pdo, 'e', 's', 'c');
 
     $query = "
         SELECT 
@@ -296,14 +311,35 @@ function getRecentResults($pdo, $userId) {
             r.Remarks,
             r.Submission_Date,
             e.Title as exam_title,
+            e.Exam_ID,
             e.Passing_Score,
             {$reviewSelect}
-            es.Session_ID
+            es.Session_ID,
+            es.Time_Started,
+            es.Time_Ended,
+            CASE WHEN es.Time_Ended IS NULL THEN 1 ELSE 0 END AS is_in_progress,
+            CASE WHEN " . latestFinishedResultMatchSql('es', 'r') . " THEN 1 ELSE 0 END AS is_latest,
+            CASE WHEN es.Time_Ended IS NULL THEN NULL ELSE (
+                SELECT COUNT(*)
+                FROM tbl_result r_num
+                INNER JOIN tbl_exam_session es_num ON es_num.Session_ID = r_num.Session_ID
+                WHERE es_num.Exam_ID = es.Exam_ID
+                  AND es_num.User_ID = es.User_ID
+                  AND es_num.Time_Ended IS NOT NULL
+                  AND (
+                      r_num.Submission_Date < r.Submission_Date
+                      OR (r_num.Submission_Date = r.Submission_Date AND r_num.Result_ID <= r.Result_ID)
+                  )
+            ) END AS attempt_number,
+            (SELECT COUNT(*) FROM tbl_exam_question eq WHERE eq.Exam_ID = e.Exam_ID) AS total_questions
         FROM tbl_result r
         INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
         INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
+        INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
+        INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
         WHERE es.User_ID = ?
-        ORDER BY r.Submission_Date DESC
+          AND {$activeCurriculum}
+        ORDER BY COALESCE(es.Time_Ended, r.Submission_Date) DESC, r.Result_ID DESC
         LIMIT 10
     ";
     
@@ -311,9 +347,19 @@ function getRecentResults($pdo, $userId) {
     $stmt->execute([$userId]);
     $results = $stmt->fetchAll();
     
-    // Add pass/fail status and format dates
+    // Add pass/fail status and format dates. An unfinished placeholder is not a grade.
     foreach ($results as &$result) {
-        $result['status'] = $result['Percentage'] >= $result['Passing_Score'] ? 'Passed' : 'Failed';
+        if ((int)($result['is_in_progress'] ?? 0) === 1) {
+            $result['is_in_progress'] = 1;
+            $result['is_latest'] = 0;
+            $result['attempt_number'] = null;
+            $result['status'] = 'In progress';
+            $result['Remarks'] = 'In progress';
+        } else {
+            $result['is_in_progress'] = 0;
+            applyExamineeGradeToResult($result);
+            $result['status'] = $result['Remarks'];
+        }
         $result['can_view_details'] = examAllowsResponseReview($result, $hasResponseReview);
         if ($hasResponseReview) {
             unset($result['Allow_Response_Review']);
@@ -332,6 +378,7 @@ function getRecentResults($pdo, $userId) {
 function getAllResults($pdo, $userId) {
     $hasResponseReview = responseReviewColumnExists($pdo);
     $reviewSelect = $hasResponseReview ? 'e.Allow_Response_Review,' : '';
+    $activeCurriculum = examineeActiveResultCurriculumCondition($pdo, 'e', 's', 'c');
 
     $query = "
         SELECT 
@@ -345,42 +392,51 @@ function getAllResults($pdo, $userId) {
             e.Duration,
             {$reviewSelect}
             s.Subject_Name,
+            e.Exam_ID,
             es.Session_ID,
             es.Time_Started,
             es.Time_Ended,
-            TIMESTAMPDIFF(MINUTE, es.Time_Started, es.Time_Ended) as time_taken_minutes,
             (SELECT COUNT(*) FROM tbl_exam_question eq WHERE eq.Exam_ID = e.Exam_ID) as total_questions
         FROM tbl_result r
         INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
         INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
-        LEFT JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
+        INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
+        INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
         WHERE es.User_ID = ?
-        ORDER BY r.Submission_Date DESC
+          AND {$activeCurriculum}
+        ORDER BY COALESCE(es.Time_Ended, r.Submission_Date) DESC, r.Result_ID DESC
     ";
     
     $stmt = $pdo->prepare($query);
     $stmt->execute([$userId]);
-    $results = $stmt->fetchAll();
+    $results = annotateAttemptHistory($stmt->fetchAll(PDO::FETCH_ASSOC));
     
-    // Format results
+    // Format results. An unfinished placeholder is not a grade.
     foreach ($results as &$result) {
+        if (!empty($result['is_in_progress'])) {
+            $result['is_latest'] = false;
+            $result['attempt_number'] = null;
+            $result['status'] = 'In progress';
+            $result['Remarks'] = 'In progress';
+        } else {
+            applyExamineeGradeToResult($result);
+            $result['status'] = $result['Remarks'];
+        }
         $result['can_view_details'] = examAllowsResponseReview($result, $hasResponseReview);
         if ($hasResponseReview) {
             unset($result['Allow_Response_Review']);
         }
 
-        // Calculate time taken
-        if ($result['time_taken_minutes']) {
-            $hours = floor($result['time_taken_minutes'] / 60);
-            $minutes = $result['time_taken_minutes'] % 60;
-            if ($hours > 0) {
-                $result['time_taken'] = $hours . 'h ' . $minutes . 'm';
-            } else {
-                $result['time_taken'] = $minutes . 'm';
-            }
-        } else {
-            $result['time_taken'] = 'N/A';
-        }
+        $answeredCount = countExamSessionAnswers(
+            $pdo,
+            (int)($result['Session_ID'] ?? 0),
+            (int)($result['Exam_ID'] ?? 0)
+        );
+        $result['time_taken'] = formatExamTimeTaken(
+            $result['Time_Started'] ?? null,
+            $result['Time_Ended'] ?? null,
+            $answeredCount
+        );
         
         // Format submission date
         if ($result['Submission_Date']) {

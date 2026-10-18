@@ -1,6 +1,4 @@
-/**
- * Shared Excel/CSV question import (Question Bank & Manage Exam Questions).
- */
+// Question import
 (function (global) {
     'use strict';
 
@@ -15,13 +13,66 @@
         Option_D: ['Option_D', 'Option D', 'option_d', 'D'],
         Option_E: ['Option_E', 'Option E', 'option_e', 'E'],
         Correct_Answer: ['Correct_Answer', 'Correct Answer', 'correct_answer', 'Answer', 'Correct'],
-        Subject: ['Subject', 'subject', 'Subject_Name', 'Subject Code', 'Subject_Code'],
+        Subject: ['Subject', 'subject', 'Subject_Name'],
     };
 
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text ?? '';
         return div.innerHTML;
+    }
+
+    const QUESTION_SHEET_HEADERS = ['Question', 'Option_A', 'Option_B', 'Option_C', 'Option_D', 'Option_E', 'Correct_Answer'];
+
+    function normalizeImportMetadata(metadata) {
+        return {
+            course: String(metadata?.course ?? '').trim(),
+            module: String(metadata?.module ?? '').trim(),
+            subject: String(metadata?.subject ?? '').trim(),
+        };
+    }
+
+    function buildQuestionsSheetAoa(metadata, questionRows) {
+        const info = normalizeImportMetadata(metadata);
+        const aoa = [
+            ['Course', info.course],
+            ['Module', info.module],
+            ['Subject', info.subject],
+            [],
+            QUESTION_SHEET_HEADERS,
+        ];
+
+        questionRows.forEach((row) => {
+            aoa.push(QUESTION_SHEET_HEADERS.map((header) => row[header] ?? ''));
+        });
+
+        return aoa;
+    }
+
+    function parseQuestionsSheet(sheet) {
+        const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        const headerIndex = matrix.findIndex((row) =>
+            String(row[0] ?? '').trim().toLowerCase() === 'question'
+        );
+
+        if (headerIndex === -1) {
+            return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        }
+
+        const headers = matrix[headerIndex].map((cell) => String(cell ?? '').trim());
+
+        return matrix
+            .slice(headerIndex + 1)
+            .filter((row) => row.some((cell) => String(cell ?? '').trim() !== ''))
+            .map((row) => {
+                const obj = {};
+                headers.forEach((header, index) => {
+                    if (header) {
+                        obj[header] = row[index] ?? '';
+                    }
+                });
+                return obj;
+            });
     }
 
     function normalizeImportRow(rawRow) {
@@ -84,18 +135,10 @@
         return { validCount, invalidRows, invalidBlocks: [] };
     }
 
-    function buildImportWorkbook(questionRows, subjectLabel) {
-        const instructions = [
-            { Step: '1', Instruction: 'Fill in questions on the Questions sheet only. Do not rename column headers.' },
-            { Step: '2', Instruction: 'Columns: Question, Option_A, Option_B, Option_C, Option_D, Option_E, Correct_Answer.' },
-            { Step: '3', Instruction: 'Correct_Answer must be A, B, C, D, or E.' },
-            { Step: '4', Instruction: subjectLabel ? `Target subject: ${subjectLabel}` : 'Import uses the subject selected in the app.' },
-        ];
-
+    function buildImportWorkbook(questionRows, metadata) {
+        const info = normalizeImportMetadata(metadata);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(instructions), 'Instructions');
-
-        const qWs = XLSX.utils.json_to_sheet(questionRows);
+        const qWs = XLSX.utils.aoa_to_sheet(buildQuestionsSheetAoa(info, questionRows));
         qWs['!cols'] = [
             { wch: 55 }, { wch: 28 }, { wch: 28 }, { wch: 28 }, { wch: 28 }, { wch: 28 }, { wch: 16 },
         ];
@@ -141,6 +184,7 @@
      * @param {string} [options.subjectNoteId]
      * @param {function(): string|null} options.getSubjectId
      * @param {function(): string} [options.getSubjectLabel]
+     * @param {function(): {course?: string,module?: string,subject?: string}} [options.getImportMetadata]
      * @param {function(): boolean} [options.ensureSubjectSelected]
      * @param {'bank'|'exam'} [options.mode='bank']
      * @param {function(): number|null} [options.getExamId]
@@ -428,7 +472,7 @@
                     const workbook = XLSX.read(data, { type: 'array' });
                     const sheetName = workbook.SheetNames.find(name => name.toLowerCase() === 'questions') || workbook.SheetNames[0];
                     const sheet = workbook.Sheets[sheetName];
-                    const jsonData = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+                    const jsonData = parseQuestionsSheet(sheet);
                     processImportFileRows(jsonData);
                 } catch (error) {
                     console.error('Error reading file:', error);
@@ -466,8 +510,11 @@
             dlBtn?.addEventListener('click', () => {
                 if (!ensureSubject()) return;
                 const subjectLabel = typeof options.getSubjectLabel === 'function' ? options.getSubjectLabel() : '';
-                const wb = buildImportWorkbook(getSampleQuestionRows(subjectLabel), subjectLabel);
-                const filenameSubject = String(subjectLabel || 'template').replace(/[^a-z0-9_-]+/gi, '_');
+                const metadata = typeof options.getImportMetadata === 'function'
+                    ? normalizeImportMetadata(options.getImportMetadata())
+                    : normalizeImportMetadata({ subject: subjectLabel });
+                const wb = buildImportWorkbook(getSampleQuestionRows(metadata.subject || subjectLabel), metadata);
+                const filenameSubject = String(metadata.subject || subjectLabel || 'template').replace(/[^a-z0-9_-]+/gi, '_');
                 XLSX.writeFile(wb, `question_import_${filenameSubject}.xlsx`);
             });
         }
@@ -475,5 +522,8 @@
 
     global.QuestionImport = {
         init: initQuestionImport,
+        buildImportWorkbook,
+        parseQuestionsSheet,
+        buildQuestionsSheetAoa,
     };
 })(window);

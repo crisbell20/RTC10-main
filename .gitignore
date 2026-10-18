@@ -21,7 +21,9 @@ logs/
 *.tmp
 *.temp
 
-# Database backups
+# Database dumps and backups (do not publish live data)
+/*.sql
+db_*.sql
 *.sql.backup
 *.sql.bak
 

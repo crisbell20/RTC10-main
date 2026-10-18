@@ -1,13 +1,15 @@
 <?php
 /**
- * User identity helpers — academic number login for examinees, email for staff.
+ * User identity helpers — badge number login for examinees, email for staff.
  */
 
-const EXAMINEE_EMAIL_DOMAIN = '@rtc.examinee.local';
-const ACADEMIC_NUMBER_FORMAT_MESSAGE = 'Academic number must be one letter followed by 3 numbers (e.g. A001)';
-const ACADEMIC_NUMBER_START = 'A001';
+require_once __DIR__ . '/person-name-utils.php';
 
-function normalizeAcademicNumber(?string $value): ?string
+const EXAMINEE_EMAIL_DOMAIN = '@rtc.examinee.local';
+const BADGE_NUMBER_FORMAT_MESSAGE = 'Badge number must be at least 6 digits';
+const BADGE_NUMBER_START = 'A001';
+
+function normalizeBadgeNumber(?string $value): ?string
 {
     if ($value === null) {
         return null;
@@ -17,22 +19,22 @@ function normalizeAcademicNumber(?string $value): ?string
     return $normalized === '' ? null : $normalized;
 }
 
-function isValidAcademicNumberFormat(?string $value): bool
+function isValidBadgeNumberFormat(?string $value): bool
 {
-    $normalized = normalizeAcademicNumber($value);
+    $normalized = normalizeBadgeNumber($value);
 
-    return $normalized !== null && preg_match('/^[A-Z][0-9]{3}$/', $normalized) === 1;
+    return $normalized !== null && preg_match('/^[0-9]{6,}$/', $normalized) === 1;
 }
 
-function validateAcademicNumberFormat(?string $value, bool $allowEmpty = false): ?string
+function validateBadgeNumberFormat(?string $value, bool $allowEmpty = false): ?string
 {
-    $normalized = normalizeAcademicNumber($value);
+    $normalized = normalizeBadgeNumber($value);
     if ($normalized === null) {
-        return $allowEmpty ? null : 'Academic number is required';
+        return $allowEmpty ? null : 'Badge number is required';
     }
 
-    if (!isValidAcademicNumberFormat($normalized)) {
-        return ACADEMIC_NUMBER_FORMAT_MESSAGE;
+    if (!isValidBadgeNumberFormat($normalized)) {
+        return BADGE_NUMBER_FORMAT_MESSAGE;
     }
 
     return null;
@@ -41,10 +43,10 @@ function validateAcademicNumberFormat(?string $value, bool $allowEmpty = false):
 /**
  * @return array{letter:string,num:int}|null
  */
-function parseAcademicNumber(string $value): ?array
+function parseBadgeNumber(string $value): ?array
 {
-    $normalized = normalizeAcademicNumber($value);
-    if ($normalized === null || !isValidAcademicNumberFormat($normalized)) {
+    $normalized = normalizeBadgeNumber($value);
+    if ($normalized === null || !isValidBadgeNumberFormat($normalized)) {
         return null;
     }
 
@@ -54,24 +56,24 @@ function parseAcademicNumber(string $value): ?array
     ];
 }
 
-function formatAcademicNumber(string $letter, int $num): string
+function formatBadgeNumber(string $letter, int $num): string
 {
     $letter = strtoupper($letter);
     if (!preg_match('/^[A-Z]$/', $letter)) {
-        throw new InvalidArgumentException('Academic number letter must be A-Z');
+        throw new InvalidArgumentException('Badge number letter must be A-Z');
     }
 
     if ($num < 1 || $num > 999) {
-        throw new InvalidArgumentException('Academic number sequence must be between 001 and 999');
+        throw new InvalidArgumentException('Badge number sequence must be between 001 and 999');
     }
 
     return $letter . str_pad((string)$num, 3, '0', STR_PAD_LEFT);
 }
 
-function compareAcademicNumbers(string $a, string $b): int
+function compareBadgeNumbers(string $a, string $b): int
 {
-    $parsedA = parseAcademicNumber($a);
-    $parsedB = parseAcademicNumber($b);
+    $parsedA = parseBadgeNumber($a);
+    $parsedB = parseBadgeNumber($b);
 
     if ($parsedA === null || $parsedB === null) {
         return strcmp($a, $b);
@@ -84,39 +86,39 @@ function compareAcademicNumbers(string $a, string $b): int
     return $parsedA['num'] <=> $parsedB['num'];
 }
 
-function incrementAcademicNumber(string $value): string
+function incrementBadgeNumber(string $value): string
 {
-    $parsed = parseAcademicNumber($value);
+    $parsed = parseBadgeNumber($value);
     if ($parsed === null) {
-        return ACADEMIC_NUMBER_START;
+        return BADGE_NUMBER_START;
     }
 
     if ($parsed['num'] < 999) {
-        return formatAcademicNumber($parsed['letter'], $parsed['num'] + 1);
+        return formatBadgeNumber($parsed['letter'], $parsed['num'] + 1);
     }
 
     if ($parsed['letter'] === 'Z') {
-        throw new RuntimeException('Academic number capacity reached (Z999)');
+        throw new RuntimeException('Badge number capacity reached (Z999)');
     }
 
-    return formatAcademicNumber(chr(ord($parsed['letter']) + 1), 1);
+    return formatBadgeNumber(chr(ord($parsed['letter']) + 1), 1);
 }
 
 /**
  * @return list<string>
  */
-function getUsedAcademicNumbers(PDO $pdo): array
+function getUsedBadgeNumbers(PDO $pdo): array
 {
     $stmt = $pdo->query("
-        SELECT Academic_Number
+        SELECT Badge_Number
         FROM tbl_user
-        WHERE Academic_Number IS NOT NULL AND TRIM(Academic_Number) != ''
+        WHERE Badge_Number IS NOT NULL AND TRIM(Badge_Number) != ''
     ");
 
     $used = [];
     foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $number) {
-        $normalized = normalizeAcademicNumber((string)$number);
-        if ($normalized !== null && isValidAcademicNumberFormat($normalized)) {
+        $normalized = normalizeBadgeNumber((string)$number);
+        if ($normalized !== null && isValidBadgeNumberFormat($normalized)) {
             $used[$normalized] = true;
         }
     }
@@ -124,45 +126,45 @@ function getUsedAcademicNumbers(PDO $pdo): array
     return array_keys($used);
 }
 
-function getNextAcademicNumber(PDO $pdo, array $reserved = []): string
+function getNextBadgeNumber(PDO $pdo, array $reserved = []): string
 {
-    $used = getUsedAcademicNumbers($pdo);
+    $used = getUsedBadgeNumbers($pdo);
 
     foreach ($reserved as $number) {
-        $normalized = normalizeAcademicNumber((string)$number);
-        if ($normalized !== null && isValidAcademicNumberFormat($normalized)) {
+        $normalized = normalizeBadgeNumber((string)$number);
+        if ($normalized !== null && isValidBadgeNumberFormat($normalized)) {
             $used[] = $normalized;
         }
     }
 
     $used = array_values(array_unique($used));
     if (empty($used)) {
-        return ACADEMIC_NUMBER_START;
+        return BADGE_NUMBER_START;
     }
 
-    usort($used, 'compareAcademicNumbers');
+    usort($used, 'compareBadgeNumbers');
 
-    return incrementAcademicNumber((string)end($used));
+    return incrementBadgeNumber((string)end($used));
 }
 
 /**
- * Resolve an examinee academic number — auto-assign when empty, validate when provided.
+ * Resolve an examinee badge number — auto-assign when empty, validate when provided.
  *
  * @return array{number:?string,error:?string}
  */
-function resolveExamineeAcademicNumber(PDO $pdo, ?string $value, array $reserved = []): array
+function resolveExamineeBadgeNumber(PDO $pdo, ?string $value, array $reserved = []): array
 {
-    $normalized = normalizeAcademicNumber($value);
+    $normalized = normalizeBadgeNumber($value);
 
     if ($normalized === null) {
         try {
-            return ['number' => getNextAcademicNumber($pdo, $reserved), 'error' => null];
+            return ['number' => getNextBadgeNumber($pdo, $reserved), 'error' => null];
         } catch (RuntimeException $e) {
             return ['number' => null, 'error' => $e->getMessage()];
         }
     }
 
-    $formatError = validateAcademicNumberFormat($normalized);
+    $formatError = validateBadgeNumberFormat($normalized);
     if ($formatError !== null) {
         return ['number' => null, 'error' => $formatError];
     }
@@ -180,18 +182,19 @@ function isExamineeRoleName(?string $roleName): bool
     return $roleName === 'Examinee';
 }
 
-function examineePlaceholderEmail(string $academicNumber): string
+function examineePlaceholderEmail(string $badgeNumber): string
 {
-    return strtolower($academicNumber) . EXAMINEE_EMAIL_DOMAIN;
+    return strtolower($badgeNumber) . EXAMINEE_EMAIL_DOMAIN;
 }
 
 function isExamineePlaceholderEmail(?string $email): bool
 {
-    if ($email === null || $email === '') {
+    $email = strtolower(trim((string)$email));
+    if ($email === '') {
         return true;
     }
 
-    return str_ends_with(strtolower($email), EXAMINEE_EMAIL_DOMAIN);
+    return str_ends_with($email, EXAMINEE_EMAIL_DOMAIN);
 }
 
 function displayUserEmail(?string $email): string
@@ -199,7 +202,7 @@ function displayUserEmail(?string $email): string
     return isExamineePlaceholderEmail($email) ? '' : (string)$email;
 }
 
-function academicNumberUniqueIndexExists(PDO $pdo): bool
+function badgeNumberUniqueIndexExists(PDO $pdo): bool
 {
     static $exists = null;
     if ($exists !== null) {
@@ -207,7 +210,7 @@ function academicNumberUniqueIndexExists(PDO $pdo): bool
     }
 
     try {
-        $stmt = $pdo->query("SHOW INDEX FROM tbl_user WHERE Key_name = 'uq_user_academic_number'");
+        $stmt = $pdo->query("SHOW INDEX FROM tbl_user WHERE Key_name = 'uq_user_badge_number'");
         $exists = $stmt && $stmt->rowCount() > 0;
     } catch (Exception $e) {
         $exists = false;
@@ -217,16 +220,16 @@ function academicNumberUniqueIndexExists(PDO $pdo): bool
 }
 
 /**
- * @return string|null Error message if academic number is taken.
+ * @return string|null Error message if badge number is taken.
  */
-function ensureAcademicNumberAvailable(PDO $pdo, ?string $academicNumber, ?int $excludeUserId = null): ?string
+function ensureBadgeNumberAvailable(PDO $pdo, ?string $badgeNumber, ?int $excludeUserId = null): ?string
 {
-    $normalized = normalizeAcademicNumber($academicNumber);
+    $normalized = normalizeBadgeNumber($badgeNumber);
     if ($normalized === null) {
         return null;
     }
 
-    $sql = 'SELECT User_ID FROM tbl_user WHERE Academic_Number = ?';
+    $sql = 'SELECT User_ID FROM tbl_user WHERE Badge_Number = ?';
     $params = [$normalized];
 
     if ($excludeUserId > 0) {
@@ -238,14 +241,14 @@ function ensureAcademicNumberAvailable(PDO $pdo, ?string $academicNumber, ?int $
     $stmt->execute($params);
 
     if ($stmt->fetch()) {
-        return "This student is already in the system (Academic Number: {$normalized}).";
+        return "This trainee is already in the system (Badge Number: {$normalized}).";
     }
 
     return null;
 }
 
 /**
- * Find a user by academic number or email (login identifier).
+ * Find a user by badge number or email (login identifier).
  * Matching is case-sensitive for both fields.
  */
 function findUserByLoginIdentifier(PDO $pdo, string $identifier): ?array
@@ -259,14 +262,25 @@ function findUserByLoginIdentifier(PDO $pdo, string $identifier): ?array
         SELECT u.*, r.Role_Name
         FROM tbl_user u
         LEFT JOIN tbl_role r ON u.Role_ID = r.Role_ID
-        WHERE BINARY u.Academic_Number = ?
+        WHERE BINARY u.Badge_Number = ?
            OR BINARY u.Email = ?
         LIMIT 1
     ');
     $stmt->execute([$trimmed, $trimmed]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$user) {
+        return null;
+    }
 
-    return $user ?: null;
+    if (array_key_exists('Firstname', $user) || array_key_exists('Lastname', $user)) {
+        $user['Fullname'] = formatPersonName(
+            $user['Firstname'] ?? '',
+            $user['Middlename'] ?? '',
+            $user['Lastname'] ?? ''
+        );
+    }
+
+    return $user;
 }
 
 /**
@@ -288,7 +302,7 @@ function resolveRoleName(PDO $pdo, $roleId): ?string
 /**
  * Build stored email for a user row based on role.
  */
-function resolveStoredEmail(?string $roleName, ?string $email, ?string $academicNumber): ?string
+function resolveStoredEmail(?string $roleName, ?string $email, ?string $badgeNumber): ?string
 {
     $trimmedEmail = trim((string)$email);
 
@@ -297,7 +311,7 @@ function resolveStoredEmail(?string $roleName, ?string $email, ?string $academic
             return $trimmedEmail;
         }
 
-        $normalized = normalizeAcademicNumber($academicNumber);
+        $normalized = normalizeBadgeNumber($badgeNumber);
         return $normalized ? examineePlaceholderEmail($normalized) : null;
     }
 

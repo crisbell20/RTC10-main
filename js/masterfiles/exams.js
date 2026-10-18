@@ -74,6 +74,10 @@ let assignmentsDirty = false;
 
 let participantsModal = null;
 let participantsExamId = null;
+let participantsDraftMode = false;
+let pendingParticipantIds = new Set();
+let pendingParticipantsChosen = false;
+let pendingParticipantEligibleCount = 0;
 let participantGroups = [];
 let participantSelectedIds = new Set();
 let participantSearchTerm = '';
@@ -137,12 +141,55 @@ function setParticipantsModalMode(viewOnly) {
     }
 }
 
-function showAlert(message, type = 'success') {
-    const alertDiv = document.getElementById('messageAlert');
-    alertDiv.innerHTML = `<div class="alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show">
-        ${message}
+function isExamModalOpen() {
+    return document.getElementById('examModal')?.classList.contains('show');
+}
+
+function clearExamFormAlert() {
+    const alertDiv = document.getElementById('examFormAlert');
+    if (alertDiv) {
+        alertDiv.innerHTML = '';
+    }
+}
+
+function bootstrapAlertClass(type) {
+    if (type === 'error' || type === 'danger') return 'danger';
+    if (type === 'warning') return 'warning';
+    if (type === 'info') return 'info';
+    return 'success';
+}
+
+function showExamFormAlert(message, type = 'error') {
+    const alertDiv = document.getElementById('examFormAlert');
+    if (!alertDiv) {
+        showPageAlert(message, type);
+        return;
+    }
+
+    alertDiv.innerHTML = `<div class="alert alert-${bootstrapAlertClass(type)} alert-dismissible fade show mb-3">
+        ${escapeHtml(message)}
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>`;
+    alertDiv.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function showPageAlert(message, type = 'success') {
+    const alertDiv = document.getElementById('messageAlert');
+    if (!alertDiv) {
+        return;
+    }
+    alertDiv.innerHTML = `<div class="alert alert-${bootstrapAlertClass(type)} alert-dismissible fade show">
+        ${escapeHtml(message)}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>`;
+}
+
+function showAlert(message, type = 'success') {
+    if (isExamModalOpen() && (type === 'error' || type === 'warning')) {
+        showExamFormAlert(message, type);
+        return;
+    }
+    showPageAlert(message, type);
 }
 
 function buildCurriculumMaps(tree) {
@@ -374,17 +421,15 @@ function buildExamActionMenu(exam) {
     const isArchived = String(exam.Is_Archived) === '1';
     const items = [];
 
-    if (isCcmdExamMode()) {
+    if (isCcmdExamMode() && !EXAM_UI_CONFIG.canEditExamDetails) {
         if (!isArchived && EXAM_UI_CONFIG.canEditQuestions) {
             items.push(`<li><button class="dropdown-item" type="button" data-exam-action="edit-questions" data-exam-id="${exam.Exam_ID}"><i class="bi bi-list-check me-2"></i>Edit questions</button></li>`);
         }
         if (EXAM_UI_CONFIG.canViewParticipants) {
-            const participantLabel = formatParticipantCountLabel(exam);
-            items.push(`<li><button class="dropdown-item" type="button" data-exam-action="view-participants" data-exam-id="${exam.Exam_ID}"><i class="bi bi-people me-2"></i>View participants${participantLabel ? ` (${participantLabel})` : ''}</button></li>`);
+            items.push(`<li><button class="dropdown-item" type="button" data-exam-action="view-participants" data-exam-id="${exam.Exam_ID}"><i class="bi bi-people me-2"></i>View participants</button></li>`);
         }
         if (EXAM_UI_CONFIG.canViewResults) {
-            const finished = parseInt(exam.Finished_Count, 10) || 0;
-            items.push(`<li><button class="dropdown-item" type="button" data-exam-action="view-responses" data-exam-id="${exam.Exam_ID}"><i class="bi bi-bar-chart-line me-2"></i>View results${finished ? ` (${finished})` : ''}</button></li>`);
+            items.push(`<li><button class="dropdown-item" type="button" data-exam-action="view-responses" data-exam-id="${exam.Exam_ID}"><i class="bi bi-bar-chart-line me-2"></i>View results</button></li>`);
         }
         return items.join('');
     }
@@ -398,11 +443,9 @@ function buildExamActionMenu(exam) {
         const reviewOn = String(exam.Allow_Response_Review) === '1';
         items.push(`<li><button class="dropdown-item" type="button" data-exam-action="toggle-review" data-exam-id="${exam.Exam_ID}"><i class="bi ${reviewOn ? 'bi-check-circle-fill text-success' : 'bi-circle'} me-2"></i>Allow response review</button></li>`);
 
-        const participantLabel = formatParticipantCountLabel(exam);
-        items.push(`<li><button class="dropdown-item" type="button" data-exam-action="manage-participants" data-exam-id="${exam.Exam_ID}"><i class="bi bi-people me-2"></i>Manage participants${participantLabel ? ` (${participantLabel})` : ''}</button></li>`);
+        items.push(`<li><button class="dropdown-item" type="button" data-exam-action="manage-participants" data-exam-id="${exam.Exam_ID}"><i class="bi bi-people me-2"></i>Manage participants</button></li>`);
 
-        const finished = parseInt(exam.Finished_Count, 10) || 0;
-        items.push(`<li><button class="dropdown-item" type="button" data-exam-action="view-responses" data-exam-id="${exam.Exam_ID}"><i class="bi bi-bar-chart-line me-2"></i>View responses${finished ? ` (${finished})` : ''}</button></li>`);
+        items.push(`<li><button class="dropdown-item" type="button" data-exam-action="view-responses" data-exam-id="${exam.Exam_ID}"><i class="bi bi-bar-chart-line me-2"></i>View responses</button></li>`);
         items.push('<li><hr class="dropdown-divider"></li>');
 
         if (exam.Status === 'Draft') {
@@ -418,8 +461,7 @@ function buildExamActionMenu(exam) {
         items.push(`<li><button class="dropdown-item" type="button" data-exam-action="archive" data-exam-id="${exam.Exam_ID}"><i class="bi bi-archive me-2"></i>Archive</button></li>`);
     } else {
         items.push(`<li><button class="dropdown-item" type="button" data-exam-action="restore" data-exam-id="${exam.Exam_ID}"><i class="bi bi-arrow-counterclockwise me-2"></i>Restore</button></li>`);
-        const finishedArchived = parseInt(exam.Finished_Count, 10) || 0;
-        items.push(`<li><button class="dropdown-item" type="button" data-exam-action="view-responses" data-exam-id="${exam.Exam_ID}"><i class="bi bi-bar-chart-line me-2"></i>View responses${finishedArchived ? ` (${finishedArchived})` : ''}</button></li>`);
+        items.push(`<li><button class="dropdown-item" type="button" data-exam-action="view-responses" data-exam-id="${exam.Exam_ID}"><i class="bi bi-bar-chart-line me-2"></i>View responses</button></li>`);
         if (exam.Exam_Code) {
             items.push(`<li><button class="dropdown-item" type="button" data-exam-action="copy-code" data-exam-id="${exam.Exam_ID}"><i class="bi bi-clipboard me-2"></i>Copy exam code</button></li>`);
         }
@@ -433,11 +475,38 @@ function formatExamCurriculum(exam) {
     return parts.map(part => escapeHtml(part)).join(', ');
 }
 
-function renderExamQuestionsAndCode(exam) {
-    const questionPart = `<span><strong>${exam.Question_Count || 0}</strong> question${(exam.Question_Count || 0) === 1 ? '' : 's'}</span>`;
+function formatExamDateTime(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('en-US');
+}
 
+function renderExamQuestionCount(exam) {
+    const count = exam.Question_Count || 0;
+    return `<span class="exam-question-count"><strong>${count}</strong> question${count === 1 ? '' : 's'}</span>`;
+}
+
+function renderExamScheduleMeta(exam) {
+    const start = formatExamDateTime(exam.Schedule_Date);
+    const due = formatExamDateTime(exam.Deadline);
+    if (!start && !due) return '';
+    return `<div class="d-flex flex-wrap gap-3 text-muted small mt-2">
+        ${start ? `<span>Start: ${escapeHtml(start)}</span>` : ''}
+        ${due ? `<span>Due: ${escapeHtml(due)}</span>` : ''}
+    </div>`;
+}
+
+function renderExamQuestionsAndCode(exam) {
     if (!exam.Exam_Code) {
-        return questionPart;
+        return '';
+    }
+
+    if (isCcmdExamMode()) {
+        return `
+        <span class="text-muted small">Exam code:</span>
+        <code class="fw-bold text-primary exam-code-value">${escapeHtml(exam.Exam_Code)}</code>
+    `;
     }
 
     const resetBtn = String(exam.Is_Archived) !== '1'
@@ -447,13 +516,8 @@ function renderExamQuestionsAndCode(exam) {
         : '';
 
     return `
-        ${questionPart}
-        <span class="text-muted">•</span>
         <span class="text-muted small">Exam code:</span>
         <code class="fw-bold text-primary exam-code-value">${escapeHtml(exam.Exam_Code)}</code>
-        <button type="button" class="btn btn-sm btn-outline-primary py-0" data-exam-action="copy-code" data-exam-id="${exam.Exam_ID}" title="Copy exam code">
-            <i class="bi bi-clipboard"></i>
-        </button>
         ${resetBtn}
     `;
 }
@@ -467,23 +531,43 @@ function renderExamAssignmentBadges(exam) {
         }
         return '<span class="text-muted small">No batches or sections assigned</span>';
     }
-    return assignments.map(a =>
-        `<span class="badge bg-light text-dark border me-1 mb-1">${escapeHtml(a.label)}</span>`
-    ).join('');
+    return assignments.map(a => {
+        const label = a.label || (
+            a.batch_name && a.section_name
+                ? `${a.batch_name} • ${a.section_name}`
+                : (a.batch_name || a.section_name || 'Assigned')
+        );
+        return `<span class="badge bg-light text-dark border me-1 mb-1">${escapeHtml(label)}</span>`;
+    }).join('');
 }
 
 function formatParticipantCountLabel(exam) {
     const selected = parseInt(exam?.Participant_Count, 10) || 0;
     const eligible = parseInt(exam?.Eligible_Participant_Count, 10) || 0;
     if (!eligible && !selected) return '';
-    return `${selected}/${eligible || selected}`;
+    if (selected > 0 && eligible > 0 && selected <= eligible) {
+        return `${selected}/${eligible}`;
+    }
+    if (selected > 0) {
+        return String(selected);
+    }
+    return String(eligible);
 }
 
 function renderParticipantBadge(exam) {
     const selected = parseInt(exam?.Participant_Count, 10) || 0;
     const eligible = parseInt(exam?.Eligible_Participant_Count, 10) || 0;
     if (!eligible && !selected) return '';
-    const label = eligible > 0 ? `${selected}/${eligible} participants` : `${selected} participant${selected === 1 ? '' : 's'}`;
+
+    let label;
+    if (selected > 0 && eligible > 0 && selected <= eligible) {
+        label = `${selected}/${eligible} participants`;
+    } else if (selected > 0) {
+        label = `${selected} participant${selected === 1 ? '' : 's'}`;
+    } else {
+        label = `${eligible} eligible`;
+    }
+
     const tone = selected > 0 ? 'bg-light text-dark border' : 'bg-warning text-dark';
     return `<span class="badge ${tone}">${escapeHtml(label)}</span>`;
 }
@@ -506,7 +590,12 @@ function updateEditParticipantSummary(examMeta = null) {
     }
 
     if (!examId) {
-        summary.textContent = 'Participants: click Manage to save exam and select examinees';
+        if (pendingParticipantsChosen) {
+            const eligible = pendingParticipantEligibleCount || pendingParticipantIds.size;
+            summary.textContent = `Participants: ${pendingParticipantIds.size}/${eligible} selected`;
+        } else {
+            summary.textContent = 'Participants: click Manage to select trainees';
+        }
         return;
     }
 
@@ -519,7 +608,7 @@ function updateEditParticipantSummary(examMeta = null) {
     if (cached) {
         summary.textContent = `Participants: ${formatParticipantCountLabel(cached) || '0/0'} selected`;
     } else {
-        summary.textContent = 'Participants: click Manage to save exam and select examinees';
+        summary.textContent = 'Participants: click Manage to select trainees';
     }
 }
 
@@ -606,125 +695,43 @@ async function saveExamDraftForParticipantAccess() {
         throw new Error('Complete the required exam fields first');
     }
 
-    const { examId, payload, sectionIds } = collectExamFormData();
-    if (examId) {
-        const parsedExamId = parseInt(examId, 10);
-        if (sectionIds.length > 0 && shouldSyncBatchesOnSave('update', parsedExamId)) {
-            await axios.post(EXAM_BATCHES_API, {
-                action: 'assign',
-                exam_id: parsedExamId,
-                section_ids: sectionIds
-            });
-            await axios.post(EXAM_PARTICIPANTS_API, {
-                action: 'sync',
-                exam_id: parsedExamId
-            });
-            preservedSectionIds = [...sectionIds];
-            assignmentsDirty = false;
-        }
-        return {
-            examId: parsedExamId,
-            exam: resolveExamForParticipants(parsedExamId)
-        };
+    const { examId, sectionIds } = collectExamFormData();
+    if (!examId) {
+        throw new Error('Save the exam before managing participants');
     }
 
-    if (!sectionIds.length) {
-        throw new Error('Assign at least one section before managing participants');
+    const parsedExamId = parseInt(examId, 10);
+    if (sectionIds.length > 0 && (shouldSyncBatchesOnSave('update', parsedExamId) || sectionIds.length > 1)) {
+        const splitData = await persistExamSectionsAndQuestions(parsedExamId, sectionIds, false);
+        keepPrimarySectionOnForm(splitData.exams || []);
+        preservedSectionIds = getSelectedExamSectionIds();
+        assignmentsDirty = false;
     }
-
-    const draftPayload = {
-        ...payload,
-        status: 'Draft',
-        action: 'add'
+    return {
+        examId: parsedExamId,
+        exam: resolveExamForParticipants(parsedExamId)
     };
-
-    const validationErrors = validateExamForm(draftPayload, '', sectionIds);
-    if (validationErrors.length > 0) {
-        throw new Error(validationErrors[0]);
-    }
-
-    const submitBtn = document.getElementById('examSubmitBtn');
-    if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Saving...';
-    }
-
-    try {
-        const res = await axios.post(EXAMS_API, draftPayload);
-        if (!res.data.success) {
-            throw new Error(res.data.message || 'Failed to save exam');
-        }
-
-        const savedExamId = parseInt(res.data.exam_id, 10);
-        const promises = [
-            axios.post(EXAM_BATCHES_API, {
-                action: 'assign',
-                exam_id: savedExamId,
-                section_ids: sectionIds
-            }).then(() => axios.post(EXAM_PARTICIPANTS_API, {
-                action: 'sync',
-                exam_id: savedExamId
-            }))
-        ];
-
-        if (selectedQuestionIds.length > 0) {
-            promises.push(axios.post(EXAM_QUESTIONS_API, {
-                action: 'assign',
-                exam_id: savedExamId,
-                question_ids: selectedQuestionIds
-            }));
-            examQuestionsLoaded = true;
-        }
-
-        await Promise.all(promises);
-
-        const examStub = buildExamRecordFromForm(savedExamId);
-        if (res.data.exam_code) {
-            examStub.Exam_Code = res.data.exam_code;
-        }
-        upsertExamInList(examStub);
-
-        document.getElementById('examId').value = String(savedExamId);
-        document.getElementById('examStatus').value = 'Draft';
-        document.getElementById('examModalLabel').textContent = 'Edit Exam';
-        if (submitBtn) submitBtn.textContent = 'Save Changes';
-        currentExamId = savedExamId;
-        examAssignmentsLoaded = true;
-
-        try {
-            await loadExams();
-        } catch (err) {
-            // Keep going with the locally upserted exam record if the refresh fails.
-        }
-
-        if (!exams.some(e => String(e.Exam_ID) === String(savedExamId))) {
-            upsertExamInList(examStub);
-        }
-
-        updateEditParticipantSummary(
-            exams.find(e => String(e.Exam_ID) === String(savedExamId)) || examStub
-        );
-
-        return {
-            examId: savedExamId,
-            exam: resolveExamForParticipants(savedExamId, examStub)
-        };
-    } finally {
-        if (submitBtn) {
-            submitBtn.disabled = false;
-        }
-    }
 }
 
 async function handleManageParticipantsFromEdit() {
+    const form = document.getElementById('examForm');
     if (!selectedExamAssignments.length) {
-        showAlert('Assign at least one section before managing participants', 'error');
+        ModalFormValidation.applyModalFieldErrors(form, {
+            examAssignmentsSection: 'Assign at least one section before managing participants'
+        }, { summaryAlertId: 'examFormAlert' });
         return;
     }
+    ModalFormValidation.clearModalFieldErrors(form);
+    clearExamFormAlert();
 
     try {
-        const { examId, exam } = await saveExamDraftForParticipantAccess();
-        await openManageParticipants(examId, exam);
+        const examId = document.getElementById('examId')?.value || '';
+        if (!examId) {
+            await openPendingParticipants();
+            return;
+        }
+        const saved = await saveExamDraftForParticipantAccess();
+        await openManageParticipants(saved.examId, saved.exam);
     } catch (err) {
         showAlert(err.response?.data?.message || err.message || 'Unable to open participant manager', 'error');
     }
@@ -748,7 +755,55 @@ async function openManageParticipants(examId, examHint = null, viewOnly = false)
     upsertExamInList(exam);
     setParticipantsModalMode(viewOnly);
 
+    participantsDraftMode = false;
     participantsExamId = parseInt(examId, 10);
+    resetParticipantsModalFilters();
+
+    document.getElementById('participantsModalSubtitle').textContent =
+        `${exam.Title} • ${formatExamCurriculum(exam)}`;
+
+    showParticipantsLoading();
+    if (document.getElementById('saveParticipantsBtn')) {
+        document.getElementById('saveParticipantsBtn').disabled = participantsViewOnly;
+    }
+
+    ensureParticipantsModal()?.show();
+    await loadParticipantsModalData();
+}
+
+async function openPendingParticipants() {
+    const sectionIds = getSelectedExamSectionIds();
+    if (!sectionIds.length) {
+        throw new Error('Assign at least one section before managing participants');
+    }
+
+    setParticipantsModalMode(false);
+    participantsDraftMode = true;
+    participantsExamId = null;
+    resetParticipantsModalFilters();
+
+    const title = document.getElementById('examTitle')?.value?.trim() || 'New exam';
+    const courseSelect = document.getElementById('examCourse');
+    const moduleSelect = document.getElementById('examModule');
+    const subjectSelect = document.getElementById('examSubject');
+    const curriculum = formatExamCurriculum({
+        Course_Name: courseSelect?.value ? (courseSelect.selectedOptions?.[0]?.text || '') : '',
+        Module_Name: moduleSelect?.value ? (moduleSelect.selectedOptions?.[0]?.text || '') : '',
+        Subject_Name: subjectSelect?.value ? (subjectSelect.selectedOptions?.[0]?.text || '') : '',
+    });
+    document.getElementById('participantsModalSubtitle').textContent =
+        `${title}${curriculum ? ` • ${curriculum}` : ''}`;
+
+    showParticipantsLoading();
+    if (document.getElementById('saveParticipantsBtn')) {
+        document.getElementById('saveParticipantsBtn').disabled = false;
+    }
+
+    ensureParticipantsModal()?.show();
+    await loadDraftParticipantsModalData(sectionIds);
+}
+
+function resetParticipantsModalFilters() {
     participantSearchTerm = '';
     participantSectionFilter = '';
     const searchInput = document.getElementById('participantSearchInput');
@@ -758,18 +813,70 @@ async function openManageParticipants(examId, examHint = null, viewOnly = false)
         sectionFilter.value = '';
         sectionFilter.style.display = 'none';
     }
+}
 
-    document.getElementById('participantsModalSubtitle').textContent =
-        `${exam.Title} • ${formatExamCurriculum(exam)}`;
-
-    document.getElementById('participantsLoading').style.display = 'block';
-    document.getElementById('participantsContent').style.display = 'none';
-    if (document.getElementById('saveParticipantsBtn')) {
-        document.getElementById('saveParticipantsBtn').disabled = participantsViewOnly;
+function showParticipantsLoading() {
+    const loading = document.getElementById('participantsLoading');
+    const content = document.getElementById('participantsContent');
+    if (loading) {
+        loading.style.display = 'block';
+        loading.innerHTML = '<div class="spinner-border text-primary" role="status"></div><p class="text-muted mt-2 mb-0">Loading participants...</p>';
     }
+    if (content) content.style.display = 'none';
+}
 
-    ensureParticipantsModal()?.show();
-    await loadParticipantsModalData();
+function showParticipantsContent() {
+    const loading = document.getElementById('participantsLoading');
+    const content = document.getElementById('participantsContent');
+    if (loading) loading.style.display = 'none';
+    if (content) content.style.display = 'block';
+}
+
+function eligibleParticipantIdsFromGroups(groups) {
+    const ids = new Set();
+    (groups || []).forEach(group => {
+        (group.participants || []).forEach(p => {
+            const id = parseInt(p.user_id, 10);
+            if (id > 0) ids.add(id);
+        });
+    });
+    return ids;
+}
+
+async function loadDraftParticipantsModalData(sectionIds) {
+    try {
+        const res = await axios.get(`${EXAM_PARTICIPANTS_API}?action=list_by_sections&section_ids=${sectionIds.join(',')}`);
+        if (!res.data.success) {
+            throw new Error(res.data.message || 'Failed to load participants');
+        }
+
+        const data = res.data.data || {};
+        participantGroups = data.groups || [];
+        const eligibleIds = eligibleParticipantIdsFromGroups(participantGroups);
+        pendingParticipantEligibleCount = eligibleIds.size;
+
+        if (pendingParticipantsChosen) {
+            participantSelectedIds = new Set([...pendingParticipantIds].filter(id => eligibleIds.has(id)));
+        } else {
+            participantSelectedIds = new Set(eligibleIds);
+        }
+
+        document.getElementById('participantsLoading').style.display = 'none';
+        document.getElementById('participantsContent').style.display = 'block';
+        if (document.getElementById('saveParticipantsBtn')) {
+            document.getElementById('saveParticipantsBtn').disabled = false;
+        }
+
+        populateParticipantSectionFilter();
+        renderParticipantsList();
+        updateParticipantSelectionCount();
+    } catch (err) {
+        const loading = document.getElementById('participantsLoading');
+        if (loading) {
+            loading.innerHTML =
+                `<div class="alert alert-danger mb-0">${escapeHtml(err.response?.data?.message || err.message || 'Failed to load participants')}</div>`;
+        }
+    }
 }
 
 async function loadParticipantsModalData() {
@@ -859,8 +966,8 @@ function getFilteredParticipantGroups() {
         ...group,
         participants: (group.participants || []).filter(p => {
             const name = String(p.fullname || '').toLowerCase();
-            const academic = String(p.academic_number || '').toLowerCase();
-            return name.includes(term) || academic.includes(term);
+            const badge = String(p.badge_number || '').toLowerCase();
+            return name.includes(term) || badge.includes(term);
         }),
     })).filter(group => (group.participants || []).length > 0);
 }
@@ -885,7 +992,7 @@ function renderParticipantsList() {
         } else if (participantSelectedIds.size > 0) {
             empty.textContent = 'Saved participants could not be matched to the assigned sections. Save the exam with sections assigned, then reopen Manage Participants.';
         } else {
-            empty.textContent = 'No examinees are enrolled in the assigned sections. Enroll examinees in Users/Batches, or assign different sections.';
+            empty.textContent = 'No trainees are assigned to these sections. Assign trainees in Users, or choose different sections.';
         }
         empty.style.display = 'block';
         return;
@@ -921,7 +1028,7 @@ function renderParticipantsList() {
                         <i class="bi bi-check-circle-fill text-success mt-1"></i>
                         <span>
                             <span class="fw-medium">${escapeHtml(p.fullname)}</span>
-                            ${p.academic_number ? `<small class="text-muted d-block">${escapeHtml(p.academic_number)}</small>` : ''}
+                            ${p.badge_number ? `<small class="text-muted d-block">${escapeHtml(p.badge_number)}</small>` : ''}
                         </span>
                     </div>`;
                     }
@@ -931,7 +1038,7 @@ function renderParticipantsList() {
                                value="${p.user_id}" ${isSelected ? 'checked' : ''}>
                         <span>
                             <span class="fw-medium">${escapeHtml(p.fullname)}</span>
-                            ${p.academic_number ? `<small class="text-muted d-block">${escapeHtml(p.academic_number)}</small>` : ''}
+                            ${p.badge_number ? `<small class="text-muted d-block">${escapeHtml(p.badge_number)}</small>` : ''}
                         </span>
                     </label>`;
                 }).join('')}
@@ -966,7 +1073,18 @@ function setAllParticipantsSelected(selected) {
 }
 
 async function saveParticipants() {
-    if (!participantsExamId || participantsViewOnly) return;
+    if (participantsViewOnly) return;
+
+    if (participantsDraftMode) {
+        pendingParticipantIds = new Set(participantSelectedIds);
+        pendingParticipantsChosen = true;
+        pendingParticipantEligibleCount = eligibleParticipantIdsFromGroups(participantGroups).size;
+        updateEditParticipantSummary();
+        participantsModal?.hide();
+        return;
+    }
+
+    if (!participantsExamId) return;
 
     const userIds = Array.from(participantSelectedIds);
     const btn = document.getElementById('saveParticipantsBtn');
@@ -999,6 +1117,23 @@ async function saveParticipants() {
     }
 }
 
+async function persistPendingParticipants(examIds) {
+    if (!pendingParticipantsChosen) return;
+    const ids = (examIds || []).map(id => parseInt(id, 10)).filter(id => id > 0);
+    if (!ids.length) return;
+
+    const userIds = Array.from(pendingParticipantIds);
+    const results = await Promise.all(ids.map(examId => axios.post(EXAM_PARTICIPANTS_API, {
+        action: 'save',
+        exam_id: examId,
+        user_ids: userIds
+    })));
+    const failed = results.find(item => !item.data?.success);
+    if (failed) {
+        throw new Error(failed.data?.message || 'Exam saved, but participants could not be assigned');
+    }
+}
+
 function renderExams() {
     const container = document.getElementById('examsContainer');
     if (!container) return;
@@ -1014,19 +1149,21 @@ function renderExams() {
         <div class="course-card" data-exam-id="${e.Exam_ID}">
             <div class="d-flex justify-content-between align-items-start mb-2">
                 <div class="flex-grow-1">
-                    <h5 class="mb-1">${escapeHtml(e.Title)}</h5>
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+                        <h5 class="mb-0">${escapeHtml(e.Title)}</h5>
+                        <span class="badge ${badgeForStatus(e.Status, e.Is_Archived)}">${escapeHtml(String(e.Is_Archived) === '1' ? 'Archived' : e.Status)}</span>
+                    </div>
                     <div class="text-muted small mb-2">${formatExamCurriculum(e)}</div>
-                    <div class="d-flex flex-wrap gap-1 mb-2">
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
                         ${renderExamAssignmentBadges(e)}
+                        ${renderExamQuestionCount(e)}
                     </div>
-                    <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
-                        ${renderExamQuestionsAndCode(e)}
-                    </div>
+                    ${renderExamQuestionsAndCode(e) ? `<div class="d-flex align-items-center flex-wrap gap-2 mb-2">${renderExamQuestionsAndCode(e)}</div>` : ''}
                 </div>
-                <div class="d-flex align-items-center gap-1 ms-2">
-                    <div class="dropdown">
-                        <button type="button" class="btn btn-sm btn-link text-secondary p-0" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="More actions">
-                            <i class="bi bi-three-dots-vertical" style="font-size: 1.2rem;"></i>
+                <div class="staff-row-actions">
+                    <div class="dropdown staff-action-menu">
+                        <button type="button" class="btn btn-sm btn-link text-secondary staff-action-toggle" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false" title="More actions">
+                            <i class="bi bi-three-dots-vertical"></i>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end">
                             ${buildExamActionMenu(e)}
@@ -1035,18 +1172,7 @@ function renderExams() {
                 </div>
             </div>
 
-            <div>
-                <div class="text-muted small mb-2">DETAILS</div>
-                <div class="d-flex gap-2 flex-wrap">
-                    ${e.Schedule_Date ? `<span class="badge bg-light text-dark border">${new Date(e.Schedule_Date).toLocaleDateString()}</span>` : ''}
-                    ${e.Deadline ? `<span class="badge bg-light text-dark border">Due: ${new Date(e.Deadline).toLocaleDateString()}</span>` : ''}
-                    ${e.Duration ? `<span class="badge bg-light text-dark border">${e.Duration} min</span>` : ''}
-                    ${e.Passing_Score ? `<span class="badge bg-light text-dark border">${e.Passing_Score}% passing</span>` : ''}
-                    ${e.Allow_Response_Review !== undefined ? `<span class="badge ${String(e.Allow_Response_Review) === '1' ? 'bg-info text-white' : 'bg-light text-dark border'}">Review: ${String(e.Allow_Response_Review) === '1' ? 'ON' : 'OFF'}</span>` : ''}
-                    ${renderParticipantBadge(e)}
-                    <span class="badge ${badgeForStatus(e.Status, e.Is_Archived)}">${escapeHtml(String(e.Is_Archived) === '1' ? 'Archived' : e.Status)}</span>
-                </div>
-            </div>
+            ${renderExamScheduleMeta(e)}
         </div>
     `).join('');
 }
@@ -1086,7 +1212,7 @@ function showExamCodeModal(code, title = 'Exam Code') {
     Swal.fire({
         title,
         html: `
-            <p class="text-muted mb-2">Share this code with examinees to start the exam.</p>
+            <p class="text-muted mb-2">Share this code with trainees to start the exam.</p>
             <div class="p-3 rounded" style="background:#f8f9fa;">
                 <code style="font-size:1.75rem; font-weight:700; letter-spacing:0.15em;">${escapeHtml(code)}</code>
             </div>
@@ -1118,7 +1244,7 @@ async function resetExamCode(examId) {
 
     const result = await Swal.fire({
         title: 'Reset exam code?',
-        html: `Generate a new code for <strong>${escapeHtml(exam.Title)}</strong>?<br><small class="text-muted">Students using the old code will no longer be able to start the exam.</small>`,
+        html: `Generate a new code for <strong>${escapeHtml(exam.Title)}</strong>?`,
         icon: 'warning',
         showCancelButton: true,
         confirmButtonText: 'Reset code',
@@ -1153,9 +1279,7 @@ async function toggleResponseReview(examId) {
 
     const result = await Swal.fire({
         title: enabling ? 'Enable response review?' : 'Disable response review?',
-        html: enabling
-            ? `Examinees will be able to view their answers and correct solutions for <strong>${escapeHtml(exam.Title)}</strong> after submission.`
-            : `Examinees will only see their score for <strong>${escapeHtml(exam.Title)}</strong>. Question breakdown and correct answers will be hidden.`,
+        html: `<strong>${escapeHtml(exam.Title)}</strong>`,
         icon: 'question',
         showCancelButton: true,
         confirmButtonText: enabling ? 'Enable review' : 'Disable review',
@@ -1229,7 +1353,7 @@ async function restoreExam(examId) {
 async function closeExam(examId) {
     const result = await Swal.fire({
         title: 'Close exam?',
-        text: 'Students will no longer be able to start this exam.',
+        text: 'Trainees will no longer be able to start this exam.',
         icon: 'warning',
         showCancelButton: true,
         confirmButtonText: 'Close exam',
@@ -1400,7 +1524,6 @@ async function openEditQuestions(examId) {
         course_name: exam.Course_Name || '',
         module_name: exam.Module_Name || '',
         subject_name: exam.Subject_Name || '',
-        subject_code: exam.Subject_Code || '',
     };
     questionPickerSubjectId = exam.Subject_ID;
 
@@ -1448,6 +1571,12 @@ async function reopenExam(examId) {
     const exam = exams.find(e => e.Exam_ID === examId);
     if (!exam) return;
 
+    if ((exam.Question_Count || 0) === 0) {
+        showAlert('Cannot reopen exam without questions. Add questions first.', 'error');
+        editExam(examId);
+        return;
+    }
+
     const defaultDeadline = (() => {
         const candidate = new Date();
         candidate.setHours(candidate.getHours() + 2);
@@ -1465,11 +1594,10 @@ async function reopenExam(examId) {
     const result = await Swal.fire({
         title: 'Reopen Exam',
         html: `
-            <p>Reopen "<strong>${escapeHtml(exam.Title)}</strong>" for students?</p>
+            <p>Reopen "<strong>${escapeHtml(exam.Title)}</strong>" for trainees?</p>
             <div class="text-start mt-3">
                 <label class="form-label">Deadline <span class="text-danger">*</span></label>
                 <input type="datetime-local" id="newDeadline" class="form-control" value="${defaultDeadlineValue}">
-                <small class="text-muted">Must be in the future. Examinee timers and empty attempts will be reset.</small>
             </div>
         `,
         icon: 'question',
@@ -1501,14 +1629,10 @@ async function reopenExam(examId) {
         });
 
         if (response.data.success) {
-            const stats = response.data.session_stats || {};
             Swal.fire({
                 icon: 'success',
                 title: 'Exam Reopened',
-                text: response.data.message || 'The exam is now available to students again',
-                footer: stats.active_reset || stats.void_removed
-                    ? `${stats.active_reset || 0} in-progress reset, ${stats.void_removed || 0} empty attempt(s) cleared`
-                    : '',
+                text: response.data.message || 'The exam is now available to trainees again',
                 timer: 2500,
                 showConfirmButton: false
             });
@@ -1571,7 +1695,6 @@ function getExamQuestionPickerContext() {
         course_name: course?.Course_Name || '',
         module_name: module?.Module_Name || '',
         subject_name: subject?.Subject_Name || '',
-        subject_code: subject?.Subject_Code || '',
     };
 }
 
@@ -1599,6 +1722,10 @@ function resetExamEditState() {
     preservedSectionIds = [];
     questionsDirty = false;
     assignmentsDirty = false;
+    pendingParticipantIds = new Set();
+    pendingParticipantsChosen = false;
+    pendingParticipantEligibleCount = 0;
+    participantsDraftMode = false;
 }
 
 function setCurriculumSnapshots() {
@@ -1646,6 +1773,85 @@ function shouldSyncBatchesOnSave(action, examId) {
         return true;
     }
     return !idsEqualAsSets(getSelectedExamSectionIds(), preservedSectionIds);
+}
+
+async function persistExamSectionsAndQuestions(savedExamId, sectionIds, syncQuestions, syncSections = true) {
+    const examId = parseInt(savedExamId, 10);
+    if (syncQuestions) {
+        await axios.post(EXAM_QUESTIONS_API, {
+            action: 'assign',
+            exam_id: examId,
+            question_ids: selectedQuestionIds
+        });
+        examQuestionsLoaded = true;
+    }
+
+    if (!syncSections) {
+        return { exams: [{ exam_id: examId, cloned: false }] };
+    }
+
+    const splitRes = await axios.post(EXAMS_API, {
+        action: 'split_to_sections',
+        exam_id: examId,
+        section_ids: sectionIds
+    });
+    if (!splitRes.data.success) {
+        throw new Error(splitRes.data.message || 'Failed to assign sections');
+    }
+
+    return splitRes.data.data || { exams: [{ exam_id: examId, cloned: false }] };
+}
+
+function keepPrimarySectionOnForm(createdExams) {
+    if (!Array.isArray(createdExams) || createdExams.length <= 1) {
+        return;
+    }
+    if (selectedExamAssignments.length > 1) {
+        selectedExamAssignments = selectedExamAssignments.slice(0, 1);
+        examAssignmentsLoaded = true;
+        preservedSectionIds = getSelectedExamSectionIds();
+        assignmentsDirty = false;
+        renderExamAssignmentList();
+    }
+}
+
+function showSavedExamCodes(createdExams, wantsPublish, isAdd) {
+    const examsCreated = (createdExams || []).filter(Boolean);
+    if (examsCreated.length > 1) {
+        const rows = examsCreated.map(item => `
+            <tr>
+                <td class="text-start">${escapeHtml(item.label || ('Exam #' + item.exam_id))}</td>
+                <td><code>${escapeHtml(item.exam_code || '—')}</code></td>
+            </tr>
+        `).join('');
+        Swal.fire({
+            title: wantsPublish ? 'Exams published' : (isAdd ? 'Exams created' : 'Exams updated'),
+            html: `
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0">
+                        <thead><tr><th class="text-start">Assigned to</th><th>Exam code</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `,
+            icon: 'success',
+            confirmButtonText: 'OK'
+        });
+        return;
+    }
+
+    if (isAdd && examsCreated[0]?.exam_code) {
+        showExamCodeModal(
+            examsCreated[0].exam_code,
+            wantsPublish ? 'Exam Created and Published' : 'Exam Created'
+        );
+        return;
+    }
+
+    showAlert(
+        wantsPublish ? 'Exam published successfully' : (isAdd ? 'Exam added successfully' : 'Exam updated successfully'),
+        'success'
+    );
 }
 
 async function confirmSubjectChangeWithQuestions() {
@@ -1751,7 +1957,7 @@ function updateQuestionPickerSummary(count) {
 
 function reloadQuestionPickerList() {
     return loadQuestions(getQuestionPickerFilters()).then(questions => {
-        currentPickerQuestions = questions || [];
+        currentPickerQuestions = (questions || []).map(normalizeQuestionRecord);
         updateQuestionPickerSummary(currentPickerQuestions.length);
         rebuildCanvasFromSelectedIds();
         renderExamQuestionCanvas();
@@ -2384,7 +2590,7 @@ function renderReadOnlyBankQuestionCard(q, index) {
                             </button>
                         </div>
                     </div>
-                    <div class="fw-medium mb-2">${escapeHtml(q.Question_Text)}</div>
+                    <div class="fw-medium mb-2 question-stem">${escapeHtml(q.Question_Text)}</div>
                     <div class="exam-q-choices">${renderChoicesHtml(q.choices)}</div>
                 </div>
             </div>
@@ -2553,20 +2759,16 @@ function bindCanvasDragEvents() {
 
 function renderQuestionBankItem(q) {
     const isOnExam = selectedQuestionIds.includes(q.Question_ID);
-    const usageCount = parseInt(q.exam_usage_count, 10) || 0;
-    const usageLabel = usageCount > 0
-        ? `Used in ${usageCount} exam${usageCount === 1 ? '' : 's'}`
-        : 'Not used yet';
 
     return `
         <div class="question-bank-item border rounded p-2 mb-2">
-            <div class="small fw-medium mb-1">${escapeHtml(q.Question_Text)}</div>
-            <div class="d-flex justify-content-between align-items-center gap-2">
-                <small class="text-muted">${usageLabel}</small>
+            <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
+                <div class="small fw-medium question-stem">${escapeHtml(q.Question_Text)}</div>
                 ${isOnExam
-                    ? '<span class="badge bg-success">Added</span>'
-                    : `<button type="button" class="btn btn-sm btn-outline-primary btn-add-to-canvas" data-question-id="${q.Question_ID}">Add</button>`}
+                    ? '<span class="badge bg-success flex-shrink-0">Added</span>'
+                    : `<button type="button" class="btn btn-sm btn-outline-primary btn-add-to-canvas flex-shrink-0" data-question-id="${q.Question_ID}">Add</button>`}
             </div>
+            <div class="exam-q-choices question-bank-item-choices">${renderChoicesHtml(q.choices)}</div>
         </div>`;
 }
 
@@ -2792,6 +2994,7 @@ function renderExamAssignmentList() {
         container.innerHTML = '<p class="text-muted text-center small mb-0 py-2" id="examAssignmentEmpty">No sections assigned</p>';
         if (countDisplay) countDisplay.textContent = '0';
         refreshAssignExamSectionSelect();
+        updateEditParticipantSummary();
         return;
     }
 
@@ -2852,6 +3055,7 @@ function tryAddExamAssignmentFromSelects(options = {}) {
 
     selectedExamAssignments.push({
         section_id: parseInt(sectionId, 10),
+        parent_batch_id: parseInt(batchId, 10),
         course_name: course?.Course_Name || 'Unknown Course',
         batch_name: batch?.Batch_Name || 'Unknown Batch',
         section_name: section?.Section_Name || 'Unknown Section'
@@ -2871,16 +3075,28 @@ function setExamAssignmentsFromApiRows(rows) {
     const apiRows = rows || [];
     selectedExamAssignments = apiRows
         .filter(row => row.Section_ID)
-        .map(row => ({
-            section_id: parseInt(row.Section_ID, 10),
-            course_name: row.Course_Name || 'Unknown Course',
-            batch_name: row.Batch_Name || 'Unknown Batch',
-            section_name: row.Section_Name || row.Batch_Name || 'Unknown Section'
-        }));
+        .map(row => {
+            let batchName = row.Batch_Name || 'Unknown Batch';
+            batchName = String(batchName).replace(/\s+Enrollment$/i, '').trim() || batchName;
+            const sectionName = row.Section_Name || 'Unknown Section';
+            // If stripping left only the section name, keep whatever parent name the API sent.
+            if (sectionName && batchName.toLowerCase() === String(sectionName).toLowerCase()) {
+                batchName = row.Batch_Name || batchName;
+                batchName = String(batchName).replace(/\s+Enrollment$/i, '').trim() || batchName;
+            }
+            const parentBatchId = row.Parent_Batch_ID ? parseInt(row.Parent_Batch_ID, 10) : null;
+            return {
+                section_id: parseInt(row.Section_ID, 10),
+                parent_batch_id: parentBatchId,
+                course_name: row.Course_Name || 'Unknown Course',
+                batch_name: batchName,
+                section_name: sectionName
+            };
+        });
 
     const seen = new Set();
     selectedExamAssignments = selectedExamAssignments.filter(item => {
-        const key = String(item.section_id);
+        const key = `${item.parent_batch_id || 0}:${item.section_id}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -2979,29 +3195,79 @@ function updateQuestionCountDisplay(count) {
     }
 }
 
-function validateExamCoreFields(payload) {
-    const errors = [];
+function validateExamCoreFieldErrors(payload) {
+    const errors = {};
     if (!payload.deadline) {
-        errors.push('Deadline is required');
+        errors.examDeadline = 'Deadline is required';
     }
     const duration = Number(payload.duration);
     if (payload.duration === null || payload.duration === '' || isNaN(duration) || duration <= 0) {
-        errors.push('Duration must be greater than 0 minutes');
+        errors.examDuration = 'Duration must be greater than 0 minutes';
     }
-    const passing = Number(payload.passing_score);
-    if (payload.passing_score === null || payload.passing_score === '' || isNaN(passing)) {
-        errors.push('Passing score is required');
-    } else if (passing < 0 || passing > 100) {
-        errors.push('Passing score must be between 0 and 100');
+    const passingRaw = String(payload.passing_score ?? '').trim();
+    if (passingRaw === '') {
+        errors.examPassing = 'Passing score is required';
+    } else if (!/^\d+(\.\d+)?$/.test(passingRaw)) {
+        errors.examPassing = 'Passing score must be a number (digits only, no letters or symbols)';
+    } else {
+        const passing = Number(passingRaw);
+        if (passing < 0 || passing > 100) {
+            errors.examPassing = 'Passing score must be between 0 and 100';
+        }
     }
     if (payload.schedule_date && payload.deadline) {
         const schedule = new Date(payload.schedule_date);
         const deadline = new Date(payload.deadline);
         if (!isNaN(schedule.getTime()) && !isNaN(deadline.getTime()) && deadline < schedule) {
-            errors.push('Due date must not be earlier than the schedule date');
+            errors.examDeadline = 'Due date must not be earlier than the schedule date';
+            errors.examSchedule = 'Schedule date must not be later than the deadline';
         }
     }
     return errors;
+}
+
+function validateExamCoreFields(payload) {
+    return Object.values(validateExamCoreFieldErrors(payload));
+}
+
+function sanitizePassingScoreInput(value) {
+    let v = String(value ?? '').replace(/[^\d.]/g, '');
+    const firstDot = v.indexOf('.');
+    if (firstDot !== -1) {
+        v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, '');
+    }
+    if (v.startsWith('.')) {
+        v = `0${v}`;
+    }
+    return v;
+}
+
+function bindPassingScoreInputGuard() {
+    const input = document.getElementById('examPassing');
+    if (!input || input.dataset.numericGuardBound === '1') return;
+    input.dataset.numericGuardBound = '1';
+    input.setAttribute('inputmode', 'decimal');
+    input.setAttribute('pattern', '[0-9]+([.][0-9]+)?');
+
+    input.addEventListener('keydown', (event) => {
+        const blocked = ['e', 'E', '+', '-', ' '];
+        if (blocked.includes(event.key)) {
+            event.preventDefault();
+        }
+    });
+
+    input.addEventListener('input', () => {
+        const cleaned = sanitizePassingScoreInput(input.value);
+        if (input.value !== cleaned) {
+            input.value = cleaned;
+        }
+    });
+
+    input.addEventListener('paste', (event) => {
+        event.preventDefault();
+        const text = (event.clipboardData || window.clipboardData)?.getData('text') || '';
+        input.value = sanitizePassingScoreInput(text);
+    });
 }
 
 function getEffectivePublishCounts(examId, sectionIds) {
@@ -3019,35 +3285,49 @@ function getEffectivePublishCounts(examId, sectionIds) {
     return { questionCount, batchCount };
 }
 
-function validateExamForm(payload, examId, sectionIds) {
-    const errors = [];
-    if (!payload.subject_id) {
-        errors.push('Subject is required');
+function validateExamFormFieldErrors(payload, examId, sectionIds) {
+    const errors = {};
+
+    if (!document.getElementById('examCourse')?.value) {
+        errors.examCourse = 'Course is required';
+    } else if (modulesEnabled && !document.getElementById('examModule')?.value) {
+        errors.examModule = 'Module is required';
+    } else if (!payload.subject_id) {
+        errors.examSubject = 'Subject is required';
     }
+
     if (!payload.title || !payload.title.trim()) {
-        errors.push('Title is required');
+        errors.examTitle = 'Title is required';
     }
-    errors.push(...validateExamCoreFields(payload));
+
+    Object.assign(errors, validateExamCoreFieldErrors(payload));
+
     if (payload.status === 'Published') {
         const { questionCount, batchCount } = getEffectivePublishCounts(examId, sectionIds);
         if (batchCount === 0) {
-            errors.push('Assign at least one section before publishing. Select a batch, then choose a section from the dropdown.');
+            errors.examAssignmentsSection = 'Assign at least one section before publishing. Select a batch, then choose a section from the dropdown.';
         }
         if (questionCount === 0) {
-            errors.push('Assign at least one question before publishing');
+            errors.examQuestionsSection = 'Assign at least one question before publishing';
         }
         const existingExam = examId ? exams.find(e => String(e.Exam_ID) === String(examId)) : null;
         const participantCount = existingExam ? (parseInt(existingExam.Participant_Count, 10) || 0) : 0;
         if (existingExam && participantCount === 0 && batchCount > 0) {
-            errors.push('Select at least one participant before publishing. Use Manage Participants.');
+            errors.examParticipantsSection = 'Select at least one participant before publishing. Use Manage Participants.';
         }
     }
+
     return errors;
+}
+
+function validateExamForm(payload, examId, sectionIds) {
+    return Object.values(validateExamFormFieldErrors(payload, examId, sectionIds));
 }
 
 // Exam form submit
 const examFormEl = document.getElementById('examForm');
 if (examFormEl) {
+ModalFormValidation.bindModalFieldErrorClear(examFormEl);
 examFormEl.addEventListener('submit', function (e) {
     e.preventDefault();
     commitPendingExamAssignment();
@@ -3073,96 +3353,118 @@ examFormEl.addEventListener('submit', function (e) {
 
     const sectionIds = getSelectedExamSectionIds();
 
-    const validationErrors = validateExamForm(payload, examId, sectionIds);
-    if (validationErrors.length > 0) {
-        showAlert(validationErrors[0], 'error');
+    const fieldErrors = validateExamFormFieldErrors(payload, examId, sectionIds);
+    if (Object.keys(fieldErrors).length > 0) {
+        ModalFormValidation.applyModalFieldErrors(form, fieldErrors, { summaryAlertId: 'examFormAlert' });
         return;
     }
+    ModalFormValidation.clearModalFieldErrors(form);
+    clearExamFormAlert();
 
     let action = 'add';
     if (examId) {
         action = 'update';
         payload.exam_id = examId;
     }
-    payload.action = action;
 
-    axios.post(EXAMS_API, payload)
-        .then(res => {
-            if (res.data.success) {
-                const savedExamId = examId || res.data.exam_id;
-                if (savedExamId) {
-                    upsertExamInList({
-                        Exam_ID: parseInt(savedExamId, 10),
-                        Title: payload.title,
-                    });
-                }
-                
-                // Create promises for batch and question assignments
-                const promises = [];
-                
-                // Sync section assignments only when something actually changed
-                const shouldSyncBatches = shouldSyncBatchesOnSave(action, savedExamId);
-                if (savedExamId && shouldSyncBatches) {
-                    promises.push(
-                        axios.post(EXAM_BATCHES_API, {
-                            action: 'assign',
-                            exam_id: savedExamId,
-                            section_ids: sectionIds
-                        }).then(() => axios.post(EXAM_PARTICIPANTS_API, {
-                            action: 'sync',
-                            exam_id: savedExamId
-                        }))
-                    );
-                }
+    const wantsPublish = payload.status === 'Published';
+    const shouldSyncBatches = shouldSyncBatchesOnSave(action, examId || null);
+    const shouldSyncQuestions = shouldSyncQuestionsOnSave(action, examId || null, payload);
+    const needsDeferredPublish = wantsPublish && (
+        action === 'add' || shouldSyncBatches || shouldSyncQuestions
+    );
 
-                // Sync questions only when selection or subject actually changed
-                const shouldSyncQuestions = shouldSyncQuestionsOnSave(action, savedExamId, payload);
-                if (savedExamId && shouldSyncQuestions) {
-                    promises.push(
-                        axios.post(EXAM_QUESTIONS_API, {
-                            action: 'assign',
-                            exam_id: savedExamId,
-                            question_ids: selectedQuestionIds
-                        })
-                    );
-                }
-                
-                // Wait for all assignments to complete
-                if (promises.length > 0) {
-                    return Promise.all(promises).then(() => {
-                        if (action === 'add' && res.data.exam_code) {
-                            showExamCodeModal(res.data.exam_code, 'Exam Created');
-                        } else {
-                            showAlert(action === 'add' ? 'Exam added successfully' : 'Exam updated successfully', 'success');
-                        }
-                        bootstrap.Modal.getInstance(document.getElementById('examModal')).hide();
-                        document.getElementById('examForm').reset();
-                        document.getElementById('examId').value = '';
-                        resetExamEditState();
-                        loadExams();
-                    }).catch(err => {
-                        console.error('Error assigning batches/questions:', err);
-                        const errorMsg = err.response?.data?.message || 'Failed to assign batches or questions';
-                        showAlert(errorMsg, 'error');
-                    });
-                } else {
-                    if (action === 'add' && res.data.exam_code) {
-                        showExamCodeModal(res.data.exam_code, 'Exam Created');
-                    } else {
-                        showAlert(action === 'add' ? 'Exam added successfully' : 'Exam updated successfully', 'success');
-                    }
-                    bootstrap.Modal.getInstance(document.getElementById('examModal')).hide();
-                    document.getElementById('examForm').reset();
-                    document.getElementById('examId').value = '';
-                    resetExamEditState();
-                    loadExams();
-                }
-            } else {
-                showAlert(res.data.message || 'Operation failed', 'error');
+    const savePayload = { ...payload, action };
+    if (needsDeferredPublish) {
+        savePayload.status = 'Draft';
+    }
+
+    function buildPublishPayload(savedExamId) {
+        return {
+            action: 'update',
+            exam_id: savedExamId,
+            subject_id: payload.subject_id,
+            title: payload.title,
+            description: payload.description,
+            schedule_date: payload.schedule_date,
+            deadline: payload.deadline,
+            duration: payload.duration,
+            passing_score: payload.passing_score,
+            status: 'Published',
+            is_randomized: payload.is_randomized
+        };
+    }
+
+    function finalizeExamSave(examIds, res) {
+        if (!needsDeferredPublish) {
+            return Promise.resolve(res);
+        }
+        const ids = (examIds || []).map(id => parseInt(id, 10)).filter(id => id > 0);
+        if (!ids.length) {
+            return Promise.resolve(res);
+        }
+        return Promise.all(ids.map(id => axios.post(EXAMS_API, buildPublishPayload(id)))).then(results => {
+            const failed = results.find(item => !item.data?.success);
+            if (failed) {
+                throw new Error(failed.data?.message || 'Failed to publish exam');
             }
+            return results[results.length - 1];
+        });
+    }
+
+    function handleSaveSuccess(createdExams, resolvedAction) {
+        showSavedExamCodes(createdExams, wantsPublish, resolvedAction === 'add');
+        bootstrap.Modal.getInstance(document.getElementById('examModal')).hide();
+        document.getElementById('examForm').reset();
+        document.getElementById('examId').value = '';
+        resetExamEditState();
+        loadExams();
+    }
+
+    axios.post(EXAMS_API, savePayload)
+        .then(async res => {
+            if (!res.data.success) {
+                showAlert(res.data.message || 'Operation failed', 'error');
+                return;
+            }
+
+            const savedExamId = examId || res.data.exam_id;
+            const resolvedAction = action;
+            if (savedExamId) {
+                upsertExamInList({
+                    Exam_ID: parseInt(savedExamId, 10),
+                    Title: payload.title,
+                });
+            }
+
+            const shouldAssignSections = shouldSyncBatches || sectionIds.length > 1;
+            let createdExams = [{
+                exam_id: parseInt(savedExamId, 10),
+                exam_code: res.data.exam_code || null,
+                cloned: false
+            }];
+
+            if (savedExamId && (shouldAssignSections || shouldSyncQuestions)) {
+                const splitData = await persistExamSectionsAndQuestions(
+                    savedExamId,
+                    sectionIds,
+                    shouldSyncQuestions,
+                    shouldAssignSections
+                );
+                if (Array.isArray(splitData.exams) && splitData.exams.length) {
+                    createdExams = splitData.exams;
+                }
+            }
+
+            const examIds = createdExams.map(item => item.exam_id);
+            if (resolvedAction === 'add' && pendingParticipantsChosen && sectionIds.length) {
+                await persistPendingParticipants(examIds);
+            }
+            await finalizeExamSave(examIds, res);
+            handleSaveSuccess(createdExams, resolvedAction);
         })
         .catch(err => {
-            showAlert(err.response?.data?.message || 'Error saving exam', 'error');
+            showAlert(err.response?.data?.message || err.message || 'Error saving exam', 'error');
         });
 });
 }
@@ -3500,7 +3802,9 @@ const examModalEl = document.getElementById('examModal');
 if (examModalEl) {
 examModalEl.addEventListener('show.bs.modal', function (e) {
     const modal = e.target;
-    
+    clearExamFormAlert();
+    ModalFormValidation.clearModalFieldErrors(document.getElementById('examForm'));
+
     // Skip reset if opening for edit
     if (modal.dataset.editMode === 'true') {
         delete modal.dataset.editMode;
@@ -3534,10 +3838,17 @@ examModalEl.addEventListener('shown.bs.modal', function() {
 
 document.getElementById('manageQuestionsBtn')?.addEventListener('click', function() {
     const ctx = getExamQuestionPickerContext();
-    if (!ctx.course_id || !ctx.subject_id || (modulesEnabled && !ctx.module_id)) {
-        showAlert('Select course, module, and subject before managing questions', 'error');
+    const form = document.getElementById('examForm');
+    const pickerErrors = {};
+    if (!ctx.course_id) pickerErrors.examCourse = 'Select a course before managing questions';
+    if (modulesEnabled && !ctx.module_id) pickerErrors.examModule = 'Select a module before managing questions';
+    if (!ctx.subject_id) pickerErrors.examSubject = 'Select a subject before managing questions';
+    if (Object.keys(pickerErrors).length > 0) {
+        ModalFormValidation.applyModalFieldErrors(form, pickerErrors, { summaryAlertId: 'examFormAlert' });
         return;
     }
+    ModalFormValidation.clearModalFieldErrors(form);
+    clearExamFormAlert();
 
     const searchInput = document.getElementById('questionSearchInput');
     if (searchInput) searchInput.value = '';
@@ -3638,6 +3949,7 @@ document.querySelectorAll('.submenu a[href]').forEach(link => {
 // Init
 applyExamPageConfig();
 setParticipantsModalMode(false);
+bindPassingScoreInputGuard();
 loadCoursesAndSubjects();
 bindExamCardActions();
 loadExams();
@@ -3705,6 +4017,14 @@ if (typeof QuestionImport !== 'undefined' && document.getElementById('examImport
             if (!ctx.subject_name) return '';
             const modulePart = ctx.module_name ? `${ctx.module_name} → ` : '';
             return `${ctx.course_name} → ${modulePart}${ctx.subject_name}`;
+        },
+        getImportMetadata: () => {
+            const ctx = getExamQuestionPickerContext();
+            return {
+                course: ctx.course_name || '',
+                module: ctx.module_name || '',
+                subject: ctx.subject_name || '',
+            };
         },
         onImportToCanvas: (rows) => {
             appendImportRowsAsExamDrafts(rows);

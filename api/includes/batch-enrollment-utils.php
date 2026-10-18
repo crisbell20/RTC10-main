@@ -5,7 +5,26 @@
  */
 function getEnrollmentBatchId(PDO $pdo, $section_id): ?int
 {
-    $stmt = $pdo->prepare('SELECT Batch_ID FROM tbl_batch WHERE Section_ID = ? LIMIT 1');
+    // Prefer a non-archived enrollment batch when several exist for the same section.
+    $hasArchive = false;
+    try {
+        $col = $pdo->query("SHOW COLUMNS FROM tbl_batch LIKE 'Is_Archived'");
+        $hasArchive = $col && $col->rowCount() > 0;
+    } catch (Exception $e) {
+        $hasArchive = false;
+    }
+
+    if ($hasArchive) {
+        $stmt = $pdo->prepare('
+            SELECT Batch_ID
+            FROM tbl_batch
+            WHERE Section_ID = ?
+            ORDER BY CASE WHEN Is_Archived = 0 OR Is_Archived IS NULL THEN 0 ELSE 1 END, Batch_ID DESC
+            LIMIT 1
+        ');
+    } else {
+        $stmt = $pdo->prepare('SELECT Batch_ID FROM tbl_batch WHERE Section_ID = ? ORDER BY Batch_ID DESC LIMIT 1');
+    }
     $stmt->execute([$section_id]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($row) {
@@ -145,9 +164,6 @@ function getExamineeActiveEnrollment(PDO $pdo, int $userId, ?int $excludeBatchId
     return $row ?: null;
 }
 
-/**
- * Human-readable course → section → batch label for enrollment messages.
- */
 function formatExamineeEnrollmentLabel(array $enrollment): string
 {
     $course = trim((string)($enrollment['Course_Name'] ?? '')) ?: 'Unknown course';
@@ -167,7 +183,7 @@ function validateExamineeSingleEnrollment(PDO $pdo, int $userId, int $targetBatc
         return null;
     }
 
-    return 'Examinee is already assigned to ' . formatExamineeEnrollmentLabel($existing)
+    return 'Trainee is already assigned to ' . formatExamineeEnrollmentLabel($existing)
         . '. Remove them from that assignment first.';
 }
 
@@ -281,9 +297,9 @@ function validateSectionCapacityForEnrollmentBatch(PDO $pdo, int $enrollmentBatc
 }
 
 /**
- * Assign an examinee to an enrollment batch.
+ * Assign an examinee to batch.
  *
- * @return array{success:bool, message:string, assigned?:bool}
+ * @return array{success:bool, message:string, assigned?:bool, reactivated?:bool}
  */
 function assignExamineeToEnrollmentBatch(PDO $pdo, int $userId, int $enrollmentBatchId, string $status = 'Active'): array
 {
@@ -302,13 +318,29 @@ function assignExamineeToEnrollmentBatch(PDO $pdo, int $userId, int $enrollmentB
     $roleName = (string)($roleCheck->fetchColumn() ?: '');
 
     if ($roleName !== 'Examinee') {
-        return ['success' => false, 'message' => 'Only examinees can be assigned to batches', 'assigned' => false];
+        return ['success' => false, 'message' => 'Only trainees can be assigned to batches', 'assigned' => false];
     }
 
-    $existing = $pdo->prepare('SELECT User_Batch_ID FROM tbl_user_batch WHERE User_ID = ? AND Batch_ID = ?');
+    $status = $status !== '' ? $status : 'Active';
+
+    $existing = $pdo->prepare('SELECT User_Batch_ID, Status FROM tbl_user_batch WHERE User_ID = ? AND Batch_ID = ? LIMIT 1');
     $existing->execute([$userId, $enrollmentBatchId]);
-    if ($existing->fetch()) {
-        return ['success' => true, 'message' => 'User already assigned to batch', 'assigned' => false];
+    $row = $existing->fetch(PDO::FETCH_ASSOC);
+
+    if ($row) {
+        if (($row['Status'] ?? '') === 'Active') {
+            return ['success' => true, 'message' => 'User already assigned to batch', 'assigned' => false];
+        }
+
+        $singleEnrollmentError = validateExamineeSingleEnrollment($pdo, $userId, $enrollmentBatchId);
+        if ($singleEnrollmentError !== null) {
+            return ['success' => false, 'message' => $singleEnrollmentError, 'assigned' => false];
+        }
+
+        $upd = $pdo->prepare('UPDATE tbl_user_batch SET Status = ?, Date_Enrolled = NOW() WHERE User_Batch_ID = ?');
+        $upd->execute([$status, (int)$row['User_Batch_ID']]);
+
+        return ['success' => true, 'message' => 'User assignment reactivated successfully', 'assigned' => true, 'reactivated' => true];
     }
 
     $singleEnrollmentError = validateExamineeSingleEnrollment($pdo, $userId, $enrollmentBatchId);

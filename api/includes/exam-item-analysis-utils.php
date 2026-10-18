@@ -46,8 +46,6 @@ function interpretDiscriminationIndex(float $index): string
 
 /**
  * Resolve upper/lower group size using the 27% rule.
- * Uses at least 2 examinees per group when the class is large enough
- * to keep groups non-overlapping.
  */
 function resolveDiscriminationGroupSize(int $totalExaminees): int
 {
@@ -67,7 +65,6 @@ function resolveDiscriminationGroupSize(int $totalExaminees): int
 
 /**
  * Rank finished sessions for discrimination grouping (highest score first).
- * Tied scores use submission time, then session id, so grouping is deterministic.
  */
 function sortSessionsForDiscrimination(array &$sessions): void
 {
@@ -112,8 +109,23 @@ function buildDiscriminationGroups(array $sessions, int $groupSize): array
     ];
 }
 
+function finishedAttemptIsNewer(array $candidate, array $current): bool
+{
+    $candidateKey = (string)($candidate['submission_date'] ?? $candidate['time_ended'] ?? '');
+    $currentKey = (string)($current['submission_date'] ?? $current['time_ended'] ?? '');
+    if ($candidateKey !== $currentKey) {
+        return $candidateKey > $currentKey;
+    }
+
+    $candidateId = (int)($candidate['result_id'] ?? $candidate['session_id'] ?? 0);
+    $currentId = (int)($current['result_id'] ?? $current['session_id'] ?? 0);
+
+    return $candidateId > $currentId;
+}
+
 /**
  * Build item analysis report for a completed exam.
+ * Each trainee contributes only their latest completed sitting.
  *
  * @return array{
  *   total_examinees:int,
@@ -141,7 +153,7 @@ function buildExamItemAnalysis(PDO $pdo, int $examId, int $assignedCount = 0): a
     $totalItems = count($questions);
 
     $sessionStmt = $pdo->prepare('
-        SELECT es.Session_ID, es.User_ID, es.Time_Ended
+        SELECT es.Session_ID, es.User_ID, es.Time_Ended, r.Submission_Date, r.Result_ID
         FROM tbl_exam_session es
         INNER JOIN tbl_result r ON r.Session_ID = es.Session_ID
         WHERE es.Exam_ID = ?
@@ -164,8 +176,20 @@ function buildExamItemAnalysis(PDO $pdo, int $examId, int $assignedCount = 0): a
             'score' => (int)$live['score'],
             'grade_percent' => $totalItems > 0 ? round(($live['score'] / $totalItems) * 100, 4) : 0.0,
             'time_ended' => $row['Time_Ended'] ?? null,
+            'submission_date' => $row['Submission_Date'] ?? null,
+            'result_id' => (int)($row['Result_ID'] ?? 0),
         ];
     }
+
+    $latestByUser = [];
+    foreach ($sessions as $session) {
+        $sessionUserId = (int)$session['user_id'];
+        $current = $latestByUser[$sessionUserId] ?? null;
+        if ($current === null || finishedAttemptIsNewer($session, $current)) {
+            $latestByUser[$sessionUserId] = $session;
+        }
+    }
+    $sessions = array_values($latestByUser);
 
     $totalExaminees = count($sessions);
     $notSubmittedCount = max(0, $assignedCount - $totalExaminees);

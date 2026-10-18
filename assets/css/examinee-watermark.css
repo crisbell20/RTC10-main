@@ -1,84 +1,59 @@
-/**
- * Examinee watermark overlay — deterrent for screenshots (traceable, non-blocking).
- */
+/* Examinee watermark */
 
 .watermark-shield {
     position: relative;
     overflow: hidden;
+    isolation: isolate;
 }
 
-.exam-watermark-layer {
+/* Results: one continuous overlay over the question review */
+#questionsShield .exam-watermark-layer {
     position: absolute;
     inset: 0;
     z-index: 5;
     pointer-events: none;
     user-select: none;
     -webkit-user-select: none;
-    display: flex;
-    flex-wrap: wrap;
-    align-content: space-evenly;
-    justify-content: space-evenly;
-    gap: 2rem 3rem;
-    padding: 1rem;
-    overflow: hidden;
-    transform: rotate(-22deg) scale(1.15);
-    transform-origin: center center;
+    background-image: var(--exam-watermark-image);
+    background-size: var(--exam-watermark-size, 420px 180px);
+    background-position: var(--exam-watermark-position, 0 0, 210px 90px);
+    background-repeat: repeat;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
 }
 
-.exam-watermark-tile {
-    font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: rgba(30, 58, 138, 0.12);
-    white-space: nowrap;
-    line-height: 1.4;
-}
-
-body.examinee-exam .exam-watermark-tile {
-    color: rgba(102, 126, 234, 0.14);
-    font-size: 0.65rem;
-}
-
-.watermark-shield > .watermark-shield-content,
-.watermark-shield > #questionsContainer,
-.watermark-shield > .question-card {
-    position: relative;
-    z-index: 2;
-}
-
-#questionsContent .section-card {
-    overflow: visible;
-}
-
-#questionsShield.watermark-shield {
-    min-height: 200px;
-    overflow: visible;
-    isolation: isolate;
-}
-
-#questionsShield .exam-watermark-layer {
-    z-index: 10;
-    min-height: 100%;
-    align-content: space-around;
-    justify-content: space-around;
-    gap: 0.75rem 1.25rem;
-    padding: 0.75rem;
-}
-
-#questionsShield .watermark-shield-content {
+#questionsShield > .watermark-shield-content {
     position: relative;
     z-index: 1;
 }
 
-body.examinee-portal #questionsShield .exam-watermark-tile {
-    color: rgba(30, 58, 138, 0.15);
-}
-
+/* Exam: stamp the question card only */
 #questionsArea.watermark-shield {
     min-height: 280px;
+    overflow: visible;
 }
 
 #questionsArea .exam-watermark-layer {
-    min-height: 100%;
+    display: none;
+}
+
+#questionsArea .question-card {
+    position: relative;
+    isolation: isolate;
+}
+
+#questionsArea .question-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+    user-select: none;
+    border-radius: inherit;
+    background-image: var(--exam-watermark-image);
+    background-size: var(--exam-watermark-size, 420px 180px);
+    background-position: var(--exam-watermark-position, 0 0, 210px 90px);
+    background-repeat: repeat;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
 }

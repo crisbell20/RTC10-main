@@ -32,6 +32,7 @@ require_once __DIR__ . '/../includes/user-identity-utils.php';
 require_once __DIR__ . '/../includes/user-import-utils.php';
 require_once __DIR__ . '/../includes/batch-enrollment-utils.php';
 require_once __DIR__ . '/../includes/validation-utils.php';
+require_once __DIR__ . '/../includes/person-name-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 // Read JSON/body once so we can also accept action in JSON payload
@@ -53,11 +54,12 @@ try {
     // Get all users
     if ($request_method === 'GET' && $action === 'list') {
         $rankCol = personnelRankColumnExists($pdo) ? 'u.Personnel_Rank,' : '';
-        $usersQuery = "SELECT u.User_ID, u.Fullname, u.Email, u.Academic_Number, {$rankCol} r.Role_Name, u.Status, u.Date_Created 
+        $nameSql = personNameSql('u');
+        $usersQuery = "SELECT u.User_ID, {$nameSql} AS Fullname, u.Firstname, u.Middlename, u.Lastname, u.Email, u.Badge_Number, {$rankCol} r.Role_Name, u.Status, u.Date_Created 
                        FROM tbl_user u 
                        LEFT JOIN tbl_role r ON u.Role_ID = r.Role_ID 
                        WHERE " . activeArchiveCondition($pdo, 'tbl_user', 'u') . "
-                       ORDER BY u.Date_Created DESC";
+                       ORDER BY {$nameSql} ASC, u.Badge_Number ASC";
         $usersStmt = $pdo->prepare($usersQuery);
         $usersStmt->execute();
         $users = $usersStmt->fetchAll();
@@ -72,6 +74,14 @@ try {
         }
 
         foreach ($users as &$user) {
+            // No longer expose "Suspended" in the Manage Users UI.
+            // Treat it as "Inactive" so the page only has Active/Inactive.
+            if (($user['Status'] ?? '') === 'Suspended') {
+                $user['Status'] = 'Inactive';
+            }
+
+            $user['Email'] = displayUserEmail($user['Email'] ?? null);
+
             if ($user['Role_Name'] === 'Examinee' && $hasUserBatch) {
                 $batchQuery = 'SELECT b.Batch_ID,
                                       COALESCE(pb.Batch_Name, b.Batch_Name) AS Batch_Name,
@@ -125,7 +135,7 @@ try {
         exit;
     }
 
-    if ($request_method === 'GET' && $action === 'next_academic_number') {
+    if ($request_method === 'GET' && $action === 'next_badge_number') {
         if ($userRole !== 'Admin') {
             http_response_code(403);
             echo json_encode(['success' => false, 'message' => 'Forbidden: Admin access required']);
@@ -136,7 +146,7 @@ try {
             http_response_code(200);
             echo json_encode([
                 'success' => true,
-                'data' => ['academic_number' => getNextAcademicNumber($pdo)],
+                'data' => ['badge_number' => getNextBadgeNumber($pdo)],
             ]);
         } catch (RuntimeException $e) {
             http_response_code(409);
@@ -147,30 +157,20 @@ try {
 
     // Add new user
     if ($request_method === 'POST' && $action === 'add') {
-        $fullname = trim($input['fullname'] ?? $_POST['fullname'] ?? '');
+        $firstname = trim((string)($input['firstname'] ?? $_POST['firstname'] ?? ''));
+        $lastname = trim((string)($input['lastname'] ?? $_POST['lastname'] ?? ''));
+        $middlename = normalizeMiddleName($input['middlename'] ?? $_POST['middlename'] ?? '');
         $email = trim($input['email'] ?? $_POST['email'] ?? '');
         $password = $input['password'] ?? $_POST['password'] ?? '';
         $role_id = $input['role_id'] ?? $_POST['role_id'] ?? '';
-        $academic_number = normalizeAcademicNumber($input['academic_number'] ?? $_POST['academic_number'] ?? null);
+        $badge_number = normalizeBadgeNumber($input['badge_number'] ?? $_POST['badge_number'] ?? null);
         $personnel_rank = trim($input['personnel_rank'] ?? $_POST['personnel_rank'] ?? '') ?: null;
         $section_id = (int)($input['section_id'] ?? $_POST['section_id'] ?? 0);
 
-        // Validate fullname - must contain only letters, spaces, dots, and hyphens
-        if (empty($fullname)) {
+        $nameError = validatePersonNameParts($firstname, $lastname, $middlename);
+        if ($nameError !== null) {
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Full name is required']);
-            exit;
-        }
-        
-        if (!preg_match("/^[a-zA-Z\s.\-']+$/", $fullname)) {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Full name must contain only letters, spaces, dots, hyphens, and apostrophes']);
-            exit;
-        }
-        
-        if (strlen($fullname) < 2 || strlen($fullname) > 100) {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Full name must be between 2 and 100 characters']);
+            echo json_encode(['success' => false, 'message' => $nameError]);
             exit;
         }
 
@@ -189,27 +189,25 @@ try {
         }
 
         if (isExamineeRoleName($roleName)) {
-            $resolvedAcademic = resolveExamineeAcademicNumber($pdo, $academic_number);
-            if ($resolvedAcademic['error'] !== null) {
+            $badgeError = validateBadgeNumberFormat($badge_number);
+            if ($badgeError !== null) {
                 http_response_code(400);
-                echo json_encode(['success' => false, 'message' => $resolvedAcademic['error']]);
+                echo json_encode(['success' => false, 'message' => $badgeError]);
                 exit;
             }
 
-            $academic_number = $resolvedAcademic['number'];
-
-            $uniqueError = ensureAcademicNumberAvailable($pdo, $academic_number);
+            $uniqueError = ensureBadgeNumberAvailable($pdo, $badge_number);
             if ($uniqueError !== null) {
                 http_response_code(409);
                 echo json_encode(['success' => false, 'message' => $uniqueError]);
                 exit;
             }
 
-            $email = resolveStoredEmail($roleName, $email, $academic_number);
+            $email = resolveStoredEmail($roleName, $email, $badge_number);
 
             if ($section_id <= 0) {
                 http_response_code(400);
-                echo json_encode(['success' => false, 'message' => 'Please select a course, batch, and section for the examinee']);
+                echo json_encode(['success' => false, 'message' => 'Please select a course, batch, and section for the trainee']);
                 exit;
             }
 
@@ -232,7 +230,7 @@ try {
                 exit;
             }
 
-            $academic_number = null;
+            $badge_number = null;
         }
 
         $rankError = validatePersonnelRank($personnel_rank);
@@ -281,19 +279,19 @@ try {
         // For Examinee: mark Must_Change_Password = 1 so they are forced to change on first login
         if ($roleName === 'Examinee') {
             if ($hasRank) {
-                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Password_Hash, Must_Change_Password, Academic_Number, Personnel_Rank, Date_Created, Status) VALUES (?, ?, ?, ?, 1, ?, ?, NOW(), ?)');
-                $stmt->execute([$role_id, $fullname, $email, $passwordHash, $academic_number, $personnel_rank, 'Active']);
+                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Firstname, Middlename, Lastname, Email, Password_Hash, Must_Change_Password, Badge_Number, Personnel_Rank, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NOW(), ?)');
+                $stmt->execute([$role_id, $firstname, $middlename, $lastname, $email, $passwordHash, $badge_number, $personnel_rank, 'Active']);
             } else {
-                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Password_Hash, Must_Change_Password, Academic_Number, Date_Created, Status) VALUES (?, ?, ?, ?, 1, ?, NOW(), ?)');
-                $stmt->execute([$role_id, $fullname, $email, $passwordHash, $academic_number, 'Active']);
+                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Firstname, Middlename, Lastname, Email, Password_Hash, Must_Change_Password, Badge_Number, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NOW(), ?)');
+                $stmt->execute([$role_id, $firstname, $middlename, $lastname, $email, $passwordHash, $badge_number, 'Active']);
             }
         } else {
             if ($hasRank) {
-                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Password_Hash, Academic_Number, Personnel_Rank, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)');
-                $stmt->execute([$role_id, $fullname, $email, $passwordHash, $academic_number, $personnel_rank, 'Active']);
+                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Firstname, Middlename, Lastname, Email, Password_Hash, Badge_Number, Personnel_Rank, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)');
+                $stmt->execute([$role_id, $firstname, $middlename, $lastname, $email, $passwordHash, $badge_number, $personnel_rank, 'Active']);
             } else {
-                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Password_Hash, Academic_Number, Date_Created, Status) VALUES (?, ?, ?, ?, ?, NOW(), ?)');
-                $stmt->execute([$role_id, $fullname, $email, $passwordHash, $academic_number, 'Active']);
+                $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Firstname, Middlename, Lastname, Email, Password_Hash, Badge_Number, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)');
+                $stmt->execute([$role_id, $firstname, $middlename, $lastname, $email, $passwordHash, $badge_number, 'Active']);
             }
         }
 
@@ -317,13 +315,14 @@ try {
                 http_response_code(409);
                 echo json_encode([
                     'success' => false,
-                    'message' => $assignResult['message'] ?? 'Unable to assign examinee to section',
+                    'message' => $assignResult['message'] ?? 'Unable to assign trainee to section',
                 ]);
                 exit;
             }
         }
 
-        auditFromSession($pdo, 'USER', 'CREATE_USER', "Created user {$fullname}", 'SUCCESS', 'user', $newUserId);
+        $createdName = formatPersonName($firstname, $middlename, $lastname);
+        auditFromSession($pdo, 'USER', 'CREATE_USER', "Created user {$createdName}", 'SUCCESS', 'user', $newUserId);
 
         http_response_code(201);
         echo json_encode([
@@ -337,11 +336,13 @@ try {
     // Update user
     if ($request_method === 'POST' && $action === 'update') {
         $user_id = $input['user_id'] ?? $_POST['user_id'] ?? '';
-        $fullname = trim($input['fullname'] ?? $_POST['fullname'] ?? '');
+        $firstname = trim((string)($input['firstname'] ?? $_POST['firstname'] ?? ''));
+        $lastname = trim((string)($input['lastname'] ?? $_POST['lastname'] ?? ''));
+        $middlename = normalizeMiddleName($input['middlename'] ?? $_POST['middlename'] ?? '');
         $email = trim($input['email'] ?? $_POST['email'] ?? '');
         $role_id = $input['role_id'] ?? $_POST['role_id'] ?? '';
         $status = $input['status'] ?? $_POST['status'] ?? 'Active';
-        $academic_number = normalizeAcademicNumber($input['academic_number'] ?? $_POST['academic_number'] ?? null);
+        $badge_number = normalizeBadgeNumber($input['badge_number'] ?? $_POST['badge_number'] ?? null);
         $personnel_rank = trim($input['personnel_rank'] ?? $_POST['personnel_rank'] ?? '') ?: null;
         $new_password = $input['new_password'] ?? $_POST['new_password'] ?? null;
 
@@ -352,22 +353,10 @@ try {
             exit;
         }
 
-        // Validate fullname
-        if (empty($fullname)) {
+        $nameError = validatePersonNameParts($firstname, $lastname, $middlename);
+        if ($nameError !== null) {
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Full name is required']);
-            exit;
-        }
-        
-        if (!preg_match("/^[a-zA-Z\s.\-']+$/", $fullname)) {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Full name must contain only letters, spaces, dots, hyphens, and apostrophes']);
-            exit;
-        }
-        
-        if (strlen($fullname) < 2 || strlen($fullname) > 100) {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Full name must be between 2 and 100 characters']);
+            echo json_encode(['success' => false, 'message' => $nameError]);
             exit;
         }
 
@@ -393,21 +382,21 @@ try {
         }
 
         if (isExamineeRoleName($roleName)) {
-            $academicError = validateAcademicNumberFormat($academic_number);
-            if ($academicError !== null) {
+            $badgeError = validateBadgeNumberFormat($badge_number);
+            if ($badgeError !== null) {
                 http_response_code(400);
-                echo json_encode(['success' => false, 'message' => $academicError]);
+                echo json_encode(['success' => false, 'message' => $badgeError]);
                 exit;
             }
 
-            $uniqueError = ensureAcademicNumberAvailable($pdo, $academic_number, (int)$user_id);
+            $uniqueError = ensureBadgeNumberAvailable($pdo, $badge_number, (int)$user_id);
             if ($uniqueError !== null) {
                 http_response_code(409);
                 echo json_encode(['success' => false, 'message' => $uniqueError]);
                 exit;
             }
 
-            $email = resolveStoredEmail($roleName, $email, $academic_number);
+            $email = resolveStoredEmail($roleName, $email, $badge_number);
         } else {
             if (empty($email)) {
                 http_response_code(400);
@@ -415,7 +404,7 @@ try {
                 exit;
             }
 
-            $academic_number = null;
+            $badge_number = null;
         }
 
         $rankError = validatePersonnelRank($personnel_rank);
@@ -426,9 +415,9 @@ try {
         }
 
         // Validate status
-        if (!in_array($status, ['Active', 'Inactive', 'Suspended'])) {
+        if (!in_array($status, ['Active', 'Inactive'])) {
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Status must be Active, Inactive, or Suspended']);
+            echo json_encode(['success' => false, 'message' => 'Status must be Active or Inactive']);
             exit;
         }
 
@@ -448,11 +437,11 @@ try {
 
         // Update user info
         if (personnelRankColumnExists($pdo)) {
-            $stmt = $pdo->prepare('UPDATE tbl_user SET Fullname = ?, Email = ?, Role_ID = ?, Academic_Number = ?, Personnel_Rank = ?, Status = ? WHERE User_ID = ?');
-            $stmt->execute([$fullname, $email, $role_id, $academic_number, $personnel_rank, $status, $user_id]);
+            $stmt = $pdo->prepare('UPDATE tbl_user SET Firstname = ?, Middlename = ?, Lastname = ?, Email = ?, Role_ID = ?, Badge_Number = ?, Personnel_Rank = ?, Status = ? WHERE User_ID = ?');
+            $stmt->execute([$firstname, $middlename, $lastname, $email, $role_id, $badge_number, $personnel_rank, $status, $user_id]);
         } else {
-            $stmt = $pdo->prepare('UPDATE tbl_user SET Fullname = ?, Email = ?, Role_ID = ?, Academic_Number = ?, Status = ? WHERE User_ID = ?');
-            $stmt->execute([$fullname, $email, $role_id, $academic_number, $status, $user_id]);
+            $stmt = $pdo->prepare('UPDATE tbl_user SET Firstname = ?, Middlename = ?, Lastname = ?, Email = ?, Role_ID = ?, Badge_Number = ?, Status = ? WHERE User_ID = ?');
+            $stmt->execute([$firstname, $middlename, $lastname, $email, $role_id, $badge_number, $status, $user_id]);
         }
 
         // If new password is provided, update it
@@ -523,7 +512,7 @@ try {
             $userLabel = auditUserLabel($pdo, $user_id);
             $detail = "Archived user {$userLabel}";
             if (($cleared['batch_enrollments_removed'] ?? 0) > 0) {
-                $detail .= "; removed {$cleared['batch_enrollments_removed']} batch/section enrollment(s)";
+                $detail .= "; removed {$cleared['batch_enrollments_removed']} batch/section assignment(s)";
             }
             if (($cleared['exam_participants_removed'] ?? 0) > 0) {
                 $detail .= "; removed from {$cleared['exam_participants_removed']} exam participant list(s)";
@@ -628,7 +617,7 @@ try {
             exit;
         }
 
-        $userCheck = $pdo->prepare('SELECT User_ID, Fullname FROM tbl_user WHERE User_ID = ?');
+        $userCheck = $pdo->prepare('SELECT User_ID FROM tbl_user WHERE User_ID = ?');
         $userCheck->execute([$user_id]);
         $targetUser = $userCheck->fetch(PDO::FETCH_ASSOC);
 
@@ -669,10 +658,11 @@ try {
     ]);
 
 } catch (Exception $e) {
+    error_log('users.php error: ' . $e->getMessage());
     http_response_code(500);
     echo json_encode([
         'success' => false,
-        'message' => 'Error: ' . $e->getMessage()
+        'message' => 'An unexpected error occurred. Please try again later.'
     ]);
 }
 ?>

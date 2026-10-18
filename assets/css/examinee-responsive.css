@@ -1,7 +1,92 @@
-/**
- * Examinee portal — mobile & tablet responsive styles only.
- * Scoped to body.examinee-portal and body.examinee-exam so admin/CCMD layouts are unchanged.
- */
+/* Examinee portal — mobile & tablet responsive styles only */
+
+@media (min-width: 992px) {
+    body.examinee-portal .top-nav {
+        align-items: center;
+        gap: 0.75rem;
+        justify-content: flex-start;
+    }
+
+    body.examinee-portal .nav-brand {
+        flex: 1;
+        min-width: 0;
+    }
+
+    body.examinee-portal .nav-user {
+        margin-left: auto;
+        flex-shrink: 0;
+    }
+
+    body.examinee-portal .examinee-nav-toggle {
+        display: inline-flex;
+        width: 40px;
+        height: 40px;
+        border: none;
+        border-radius: 50%;
+        background: transparent;
+    }
+
+    body.examinee-portal .examinee-nav-toggle:hover {
+        background: rgba(255, 255, 255, 0.15);
+    }
+
+    body.examinee-portal .sidebar {
+        transition: width 0.22s ease;
+    }
+
+    body.examinee-portal.examinee-sidebar-collapsed .sidebar {
+        width: 72px;
+        padding: 0;
+        overflow: visible;
+        background: transparent;
+        border-right: none;
+        transition: none;
+    }
+
+    body.examinee-portal.examinee-sidebar-collapsed .sidebar-menu a {
+        justify-content: center;
+        gap: 0;
+        padding: 0.75rem 0.5rem;
+        padding-left: 0.5rem;
+        border-left: none;
+        font-size: 0;
+    }
+
+    body.examinee-portal.examinee-sidebar-collapsed .sidebar-menu a:hover,
+    body.examinee-portal.examinee-sidebar-collapsed .sidebar-menu a.active {
+        padding-left: 0.5rem;
+    }
+
+    body.examinee-portal.examinee-sidebar-collapsed .sidebar-menu a.active {
+        box-shadow: inset 3px 0 0 var(--secondary-color);
+    }
+
+    body.examinee-portal.examinee-sidebar-collapsed .sidebar-menu a i {
+        font-size: 1.15rem;
+        width: 1.25rem;
+        flex-shrink: 0;
+    }
+
+    body.examinee-portal.examinee-sidebar-collapsed .sidebar {
+        position: fixed;
+        z-index: 1000;
+    }
+
+    body.examinee-portal.examinee-sidebar-collapsed .sidebar-menu {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 72px;
+        min-height: 100%;
+        max-height: calc(100vh - var(--top-nav-height));
+        overflow-x: visible;
+        overflow-y: auto;
+        background-color: var(--sidebar-bg);
+        border-right: 1px solid var(--border-color);
+        padding: 0.75rem 0 1.5rem;
+        box-sizing: border-box;
+    }
+}
 
 /* ─── Dashboard layout (examinee portal pages) ─── */
 
@@ -23,6 +108,12 @@
     body.examinee-portal .nav-brand {
         flex: 1;
         min-width: 0;
+        gap: 0.5rem;
+    }
+
+    body.examinee-portal .nav-brand-logo {
+        width: 30px;
+        height: 30px;
     }
 
     body.examinee-portal .nav-brand h5 {
@@ -38,12 +129,7 @@
 
     body.examinee-portal .nav-user span,
     body.examinee-portal .nav-user .nav-user-name {
-        display: inline-block;
-        max-width: 120px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 0.85rem;
+        display: none;
     }
 
     body.examinee-portal .dashboard-container {
@@ -102,6 +188,7 @@
         width: 100%;
         min-width: 0;
         padding: 1rem;
+        margin-left: 0;
     }
 
     body.examinee-portal .page-header h2 {
@@ -432,10 +519,6 @@
         align-items: stretch !important;
     }
 
-    body.examinee-portal .perf-filters {
-        width: 100%;
-    }
-
     body.examinee-portal #subjectDetailModal .modal-dialog {
         margin: 0.5rem;
         max-width: calc(100% - 1rem);
@@ -494,13 +577,50 @@ body.examinee-portal.sidebar-open {
 
 /* Result pages */
 @media (max-width: 767.98px) {
-    body.examinee-portal .result-summary {
-        padding: 1.25rem !important;
+    body.examinee-portal .page-header {
+        margin-bottom: 1rem;
     }
 
-    body.examinee-portal .result-summary .d-flex.justify-content-between {
+    body.examinee-portal .page-header h2 {
+        font-size: 1.25rem;
+    }
+
+    body.examinee-portal .page-header p.text-muted {
+        font-size: 0.8rem;
+        margin-bottom: 0;
+    }
+
+    body.examinee-portal .result-summary {
+        padding: 1rem !important;
+        margin-bottom: 1rem !important;
+        border-radius: 10px !important;
+    }
+
+    body.examinee-portal .result-summary h2 {
+        font-size: 1.1rem !important;
+        line-height: 1.35;
+        margin-bottom: 0.35rem !important;
+    }
+
+    body.examinee-portal .result-summary > .d-flex.justify-content-between {
         flex-direction: column;
-        gap: 0.75rem;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem !important;
+    }
+
+    body.examinee-portal .result-summary > .d-flex.justify-content-between p {
+        font-size: 0.78rem;
+    }
+
+    body.examinee-portal .result-summary .badge-result {
+        font-size: 0.75rem !important;
+        padding: 0.35rem 0.65rem !important;
+        align-self: flex-start;
+    }
+
+    body.examinee-portal .result-summary .row.g-3 {
+        --bs-gutter-x: 0.5rem;
+        --bs-gutter-y: 0.5rem;
     }
 
     body.examinee-portal .result-summary .row.g-3 > [class*="col-"] {
@@ -508,15 +628,102 @@ body.examinee-portal.sidebar-open {
         max-width: 50%;
     }
 
+    body.examinee-portal .result-summary .stat-card {
+        padding: 0.5rem 0.4rem !important;
+        border-radius: 6px !important;
+    }
+
+    body.examinee-portal .result-summary .stat-card h3 {
+        font-size: 1.05rem !important;
+        line-height: 1.2;
+    }
+
+    body.examinee-portal .result-summary .stat-card p {
+        font-size: 0.65rem !important;
+        margin-top: 0.15rem;
+    }
+
+    body.examinee-portal .result-summary .mt-4.pt-3 {
+        margin-top: 0.75rem !important;
+        padding-top: 0.65rem !important;
+    }
+
+    body.examinee-portal .result-summary .mt-4.pt-3 small {
+        font-size: 0.68rem;
+    }
+
+    body.examinee-portal .result-summary .mt-4.pt-3 p {
+        font-size: 0.8rem;
+        margin-bottom: 0.35rem !important;
+    }
+
+    body.examinee-portal .section-header {
+        padding: 0.75rem 1rem;
+    }
+
+    body.examinee-portal .section-header h5 {
+        font-size: 0.95rem;
+    }
+
+    body.examinee-portal .section-header i {
+        font-size: 1rem !important;
+    }
+
     body.examinee-portal .question-card {
-        padding: 1rem;
+        padding: 0.75rem !important;
+        margin-bottom: 0.75rem !important;
+        border-radius: 8px;
+    }
+
+    body.examinee-portal .question-card .question-number {
+        width: 26px;
+        height: 26px;
+        line-height: 26px;
+        font-size: 0.8rem;
+        margin-right: 0.4rem;
+        flex-shrink: 0;
+    }
+
+    body.examinee-portal .question-card .fw-medium {
+        font-size: 0.875rem;
+        line-height: 1.4;
+    }
+
+    body.examinee-portal .question-card .badge {
+        font-size: 0.65rem;
+        padding: 0.25rem 0.45rem;
+        white-space: nowrap;
+    }
+
+    body.examinee-portal .question-card .d-flex.align-items-start {
+        gap: 0.35rem;
+    }
+
+    body.examinee-portal .choice-item {
+        padding: 0.5rem 0.6rem !important;
+        margin: 0.35rem 0 !important;
+        font-size: 0.8125rem;
+        line-height: 1.35;
+        border-width: 1px !important;
+    }
+
+    body.examinee-portal .choice-item .badge {
+        font-size: 0.6rem;
+        padding: 0.15rem 0.35rem;
+        display: inline-block;
+        margin-top: 0.2rem;
+    }
+
+    body.examinee-portal #resultContent .alert {
+        font-size: 0.8125rem;
+        padding: 0.65rem 0.75rem;
     }
 }
 
 @media (max-width: 575.98px) {
     body.examinee-portal .result-summary .row.g-3 > [class*="col-"] {
-        flex: 0 0 100%;
-        max-width: 100%;
+        flex: 0 0 50%;
+        max-width: 50%;
     }
 }
 
@@ -534,25 +741,87 @@ body.examinee-portal.sidebar-open {
     }
 
     body.examinee-exam .exam-proctor-notice {
-        font-size: 0.8rem;
-        padding: 0.5rem 0.75rem;
+        display: none !important;
+    }
+
+    body.examinee-exam #questionsArea {
+        touch-action: pan-y;
     }
 
     body.examinee-exam .exam-header {
-        padding: 1rem;
-        margin-bottom: 1rem;
+        padding: 0.65rem 0.8rem;
+        margin-bottom: 0.75rem;
         position: sticky;
         top: 0;
         z-index: 100;
     }
 
     body.examinee-exam .exam-header h2 {
-        font-size: 1.15rem;
+        font-size: 1.05rem;
+        line-height: 1.25;
+        margin-bottom: 0.1rem;
+    }
+
+    body.examinee-exam .exam-header #examInfo {
+        font-size: 0.78rem;
         line-height: 1.3;
+        opacity: 1;
+        color: rgba(255, 255, 255, 0.92);
+        margin-top: 0;
     }
 
     body.examinee-exam .exam-header .timer {
-        font-size: 1.25rem;
+        font-size: 1.1rem;
+        line-height: 1.15;
+    }
+
+    body.examinee-exam .exam-header #deadlineInfo {
+        font-size: 0.75rem;
+        margin-top: 0.2rem !important;
+    }
+
+    body.examinee-exam .exam-header .progress-bar-custom {
+        margin-top: 0.5rem !important;
+    }
+
+    body.examinee-exam .exam-header > small.text-white-50 {
+        margin-top: 0.3rem !important;
+        font-size: 0.7rem;
+    }
+
+    body.examinee-exam .exam-fullscreen-btn {
+        display: inline-flex;
+        min-height: 44px;
+    }
+
+    body.examinee-exam .question-number {
+        flex-shrink: 0;
+        width: 34px;
+        height: 34px;
+        aspect-ratio: 1;
+        box-sizing: border-box;
+    }
+
+    body.examinee-exam .question-card h5 {
+        font-size: 1.05rem;
+        line-height: 1.45;
+    }
+
+    body.examinee-exam .choice-label-letter {
+        font-size: 1rem;
+        min-width: 1.5rem;
+        line-height: 1.5;
+    }
+
+    body.examinee-exam .choice-label-text {
+        font-size: 1rem;
+        line-height: 1.5;
+    }
+
+    body.examinee-exam .choice-option input[type="radio"] {
+        width: 1.1rem;
+        height: 1.1rem;
+        margin-top: 0.25rem;
     }
 
     body.examinee-exam .question-card {
@@ -564,7 +833,9 @@ body.examinee-portal.sidebar-open {
         min-height: 48px;
         padding: 14px 16px;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
+        width: 100%;
+        flex: 0 0 auto;
     }
 
     body.examinee-exam .nav-buttons {
@@ -597,18 +868,97 @@ body.examinee-portal.sidebar-open {
         font-size: 0.85rem;
         margin-bottom: 0.25rem;
     }
+
+    body.examinee-exam.exam-mobile-fs-hint .nav-buttons {
+        padding-bottom: max(72px, env(safe-area-inset-bottom));
+    }
+
+    body.examinee-exam .exam-proctor-notice[hidden] {
+        display: none !important;
+    }
 }
 
 @media (max-width: 575.98px) {
-    body.examinee-exam .exam-header .d-flex.justify-content-between {
-        flex-direction: column;
-        align-items: flex-start !important;
-        gap: 0.75rem;
+    body.examinee-exam .exam-header {
+        padding: 0.45rem 0.65rem;
+        margin-bottom: 0.55rem;
+        border-radius: 6px;
     }
 
-    body.examinee-exam .exam-header .text-end {
-        text-align: left !important;
-        width: 100%;
+    body.examinee-exam .exam-header .d-flex.justify-content-between {
+        flex-direction: row !important;
+        flex-wrap: nowrap;
+        align-items: flex-start !important;
+        gap: 0.45rem;
+    }
+
+    body.examinee-exam .exam-header .d-flex.justify-content-between > div:first-child {
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    body.examinee-exam .exam-header h2 {
+        font-size: 0.92rem;
+        line-height: 1.2;
+        margin-bottom: 0.05rem;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    body.examinee-exam .exam-header #examInfo {
+        font-size: 0.7rem;
+        line-height: 1.25;
+        white-space: normal;
+        overflow: visible;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+    }
+
+    body.examinee-exam .exam-header .text-end,
+    body.examinee-exam .exam-header-aside {
+        text-align: right !important;
+        align-items: flex-end !important;
+        width: auto !important;
+        max-width: 36%;
+        flex: 0 0 auto;
+    }
+
+    body.examinee-exam .exam-header .timer {
+        font-size: 0.95rem;
+        font-variant-numeric: tabular-nums;
+    }
+
+    body.examinee-exam .exam-header-aside > small {
+        display: none;
+    }
+
+    body.examinee-exam .exam-header #deadlineInfo {
+        font-size: 0.65rem;
+        line-height: 1.25;
+        margin-top: 0.1rem !important;
+        white-space: normal;
+        text-align: right;
+    }
+
+    body.examinee-exam .exam-header .progress-bar-custom {
+        height: 5px;
+        margin-top: 0.4rem !important;
+    }
+
+    body.examinee-exam .exam-header > small.text-white-50 {
+        margin-top: 0.2rem !important;
+        font-size: 0.65rem;
+    }
+
+    body.examinee-exam .exam-fullscreen-btn {
+        display: inline-flex;
+        width: auto;
+        min-height: 36px;
+        margin-top: 0.35rem;
+        font-size: 0.75rem;
+        padding: 0.25rem 0.55rem;
     }
 
     body.examinee-exam .nav-buttons #prevBtn,

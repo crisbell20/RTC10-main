@@ -17,6 +17,7 @@ require_once __DIR__ . '/../includes/question-publish-utils.php';
 require_once __DIR__ . '/../includes/exam-type-utils.php';
 require_once __DIR__ . '/../includes/validation-utils.php';
 require_once __DIR__ . '/../includes/exam-deadline-finalize-utils.php';
+require_once __DIR__ . '/../includes/exam-clone-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
 $rawInput = file_get_contents('php://input');
@@ -26,11 +27,11 @@ $hasExamCode = examCodeColumnsExist($pdo);
 $hasResponseReview = responseReviewColumnExists($pdo);
 $userRole = $_SESSION['user_role'] ?? '';
 
-function requireAdminRole(): void {
+function requireExamManagerRole(): void {
     global $userRole;
     if ($userRole !== 'Admin') {
         http_response_code(403);
-        echo json_encode(['success' => false, 'message' => 'Only administrators can perform this action']);
+        echo json_encode(['success' => false, 'message' => 'Forbidden: Admin access required']);
         exit;
     }
 }
@@ -53,9 +54,7 @@ function examListGroupByFields(PDO $pdo, bool $hasExamCode, bool $hasResponseRev
         'e.Passing_Score',
         'e.Status',
         'e.Is_Randomized',
-        'e.Time_Limit',
         's.Subject_Name',
-        's.Subject_Code',
         'c.Course_Name',
         $curriculum['course_id_select'],
     ];
@@ -99,17 +98,54 @@ function validateExamCoreFields($deadline, $duration, $passing_score, $schedule_
         return 'Duration must be greater than 0 minutes';
     }
 
-    if ($passing_score === null || $passing_score === '' || !is_numeric($passing_score)) {
+    if ($passing_score === null || $passing_score === '') {
         return 'Passing score is required';
     }
 
-    $passing = (float)$passing_score;
+    $passingRaw = trim((string)$passing_score);
+    if (!preg_match('/^\d+(\.\d+)?$/', $passingRaw)) {
+        return 'Passing score must be a number between 0 and 100 (digits only)';
+    }
+
+    $passing = (float)$passingRaw;
     if ($passing < 0 || $passing > 100) {
         return 'Passing score must be between 0 and 100';
     }
 
     if ($schedule_date && $deadline && strtotime($deadline) < strtotime($schedule_date)) {
         return 'Due date must not be earlier than the schedule date';
+    }
+
+    return null;
+}
+
+/**
+ * Validate that an exam meets all requirements before publishing or reopening.
+ * Returns error message string or null when valid.
+ */
+function validateExamPublishRequirements(PDO $pdo, int $examId): ?string
+{
+    $stmt = $pdo->prepare('SELECT COUNT(*) as question_count FROM tbl_exam_question WHERE Exam_ID = ?');
+    $stmt->execute([$examId]);
+    $question_count = (int)$stmt->fetch(PDO::FETCH_ASSOC)['question_count'];
+
+    if ($question_count === 0) {
+        return 'Cannot publish exam without questions';
+    }
+
+    $stmt = $pdo->prepare('SELECT COUNT(*) as batch_count FROM tbl_exam_batch WHERE Exam_ID = ?');
+    $stmt->execute([$examId]);
+    $batch_count = (int)$stmt->fetch(PDO::FETCH_ASSOC)['batch_count'];
+
+    if ($batch_count === 0) {
+        return 'Cannot publish exam without batch assignments';
+    }
+
+    if (examParticipantTableExists($pdo)) {
+        $participant_count = countExamParticipants($pdo, $examId);
+        if ($participant_count === 0) {
+            return 'Cannot publish exam without at least one selected participant';
+        }
     }
 
     return null;
@@ -140,9 +176,9 @@ try {
         $sql = "
             SELECT e.Exam_ID, e.User_ID, e.Subject_ID, e.Title, {$examTypeSelect} e.Description,
                    e.Schedule_Date, e.Deadline, e.Duration, e.Passing_Score, e.Status,
-                   e.Is_Randomized, e.Time_Limit,
+                   e.Is_Randomized,
                    {$codeColumns}{$reviewColumn}
-                   s.Subject_Name, s.Subject_Code,
+                   s.Subject_Name,
                    {$curriculum['module_select']}
                    {$curriculum['course_id_select']} AS Course_ID,
                    c.Course_Name,
@@ -217,7 +253,7 @@ try {
 
     // Add exam
     if ($request_method === 'POST' && $action === 'add') {
-        requireAdminRole();
+        requireExamManagerRole();
         $subject_id = $input['subject_id'] ?? $_POST['subject_id'] ?? '';
         $title = $input['title'] ?? $_POST['title'] ?? '';
         $typeResult = resolveExamTypeForSave($pdo, $input, $title, null);
@@ -236,7 +272,6 @@ try {
         $passing_score = $input['passing_score'] ?? $_POST['passing_score'] ?? null;
         $status = $input['status'] ?? $_POST['status'] ?? 'Draft';
         $is_randomized = (int)($input['is_randomized'] ?? $_POST['is_randomized'] ?? 0);
-        $time_limit = $input['time_limit'] ?? $_POST['time_limit'] ?? null;
         $user_id = $_SESSION['user_id'];
 
         if (empty($subject_id) || empty($title)) {
@@ -252,6 +287,12 @@ try {
             exit;
         }
 
+        if ($status === 'Published') {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Cannot publish exam without questions']);
+            exit;
+        }
+
         $examCode = null;
         $hasExamType = examTypeColumnExists($pdo);
         if ($hasExamCode) {
@@ -261,8 +302,8 @@ try {
             $stmt = $pdo->prepare('
                 INSERT INTO tbl_exam
                 (User_ID, Subject_ID, Title, ' . ($hasExamType ? 'Exam_Type, ' : '') . 'Description, Schedule_Date, Deadline, Duration,
-                 Passing_Score, Status, Is_Randomized, Time_Limit, Exam_Code, Exam_Code_Generated_At)
-                VALUES (?, ?, ?, ' . ($hasExamType ? '?, ' : '') . '?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                 Passing_Score, Status, Is_Randomized, Exam_Code, Exam_Code_Generated_At)
+                VALUES (?, ?, ?, ' . ($hasExamType ? '?, ' : '') . '?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ');
             $params = [
                 $user_id,
@@ -280,7 +321,6 @@ try {
                 $passing_score ?: null,
                 $status,
                 $is_randomized,
-                $time_limit ?: null,
                 $examCode,
             ]);
             $stmt->execute($params);
@@ -288,8 +328,8 @@ try {
             $stmt = $pdo->prepare('
                 INSERT INTO tbl_exam
                 (User_ID, Subject_ID, Title, ' . ($hasExamType ? 'Exam_Type, ' : '') . 'Description, Schedule_Date, Deadline, Duration,
-                 Passing_Score, Status, Is_Randomized, Time_Limit)
-                VALUES (?, ?, ?, ' . ($hasExamType ? '?, ' : '') . '?, ?, ?, ?, ?, ?, ?, ?)
+                 Passing_Score, Status, Is_Randomized)
+                VALUES (?, ?, ?, ' . ($hasExamType ? '?, ' : '') . '?, ?, ?, ?, ?, ?, ?)
             ');
             $params = [
                 $user_id,
@@ -307,7 +347,6 @@ try {
                 $passing_score ?: null,
                 $status,
                 $is_randomized,
-                $time_limit ?: null,
             ]);
             $stmt->execute($params);
         }
@@ -328,7 +367,7 @@ try {
 
     // Update exam
     if ($request_method === 'POST' && $action === 'update') {
-        requireAdminRole();
+        requireExamManagerRole();
         $exam_id = $input['exam_id'] ?? $_POST['exam_id'] ?? '';
         $subject_id = $input['subject_id'] ?? $_POST['subject_id'] ?? '';
         $title = $input['title'] ?? $_POST['title'] ?? '';
@@ -349,7 +388,6 @@ try {
         $passing_score = $input['passing_score'] ?? $_POST['passing_score'] ?? null;
         $status = $input['status'] ?? $_POST['status'] ?? 'Draft';
         $is_randomized = (int)($input['is_randomized'] ?? $_POST['is_randomized'] ?? 0);
-        $time_limit = $input['time_limit'] ?? $_POST['time_limit'] ?? null;
 
         if (empty($exam_id) || empty($subject_id) || empty($title)) {
             http_response_code(400);
@@ -380,33 +418,11 @@ try {
         $previousStatus = (string)($prevStatusStmt->fetchColumn() ?: '');
 
         if ($status === 'Published') {
-            $stmt = $pdo->prepare('SELECT COUNT(*) as question_count FROM tbl_exam_question WHERE Exam_ID = ?');
-            $stmt->execute([$exam_id]);
-            $question_count = $stmt->fetch(PDO::FETCH_ASSOC)['question_count'];
-
-            if ($question_count == 0) {
+            $publishError = validateExamPublishRequirements($pdo, (int)$exam_id);
+            if ($publishError !== null) {
                 http_response_code(400);
-                echo json_encode(['success' => false, 'message' => 'Cannot publish exam without questions']);
+                echo json_encode(['success' => false, 'message' => $publishError]);
                 exit;
-            }
-
-            $stmt = $pdo->prepare('SELECT COUNT(*) as batch_count FROM tbl_exam_batch WHERE Exam_ID = ?');
-            $stmt->execute([$exam_id]);
-            $batch_count = $stmt->fetch(PDO::FETCH_ASSOC)['batch_count'];
-
-            if ($batch_count == 0) {
-                http_response_code(400);
-                echo json_encode(['success' => false, 'message' => 'Cannot publish exam without batch assignments']);
-                exit;
-            }
-
-            if (examParticipantTableExists($pdo)) {
-                $participant_count = countExamParticipants($pdo, (int)$exam_id);
-                if ($participant_count === 0) {
-                    http_response_code(400);
-                    echo json_encode(['success' => false, 'message' => 'Cannot publish exam without at least one selected participant']);
-                    exit;
-                }
             }
         }
 
@@ -422,8 +438,7 @@ try {
                    Duration = ?,
                    Passing_Score = ?,
                    Status = ?,
-                   Is_Randomized = ?,
-                   Time_Limit = ?
+                   Is_Randomized = ?
              WHERE Exam_ID = ?
         ');
         $updateParams = [$subject_id, $title];
@@ -438,7 +453,6 @@ try {
             $passing_score ?: null,
             $status,
             $is_randomized,
-            $time_limit ?: null,
             $exam_id,
         ]);
         $stmt->execute($updateParams);
@@ -470,7 +484,7 @@ try {
 
     // Reset exam access code
     if ($request_method === 'POST' && $action === 'reset_code') {
-        requireAdminRole();
+        requireExamManagerRole();
         if (!$hasExamCode) {
             http_response_code(503);
             echo json_encode(['success' => false, 'message' => 'Exam code feature is not available. Run the database migration.']);
@@ -508,7 +522,7 @@ try {
 
     // Archive exam
     if ($request_method === 'POST' && $action === 'archive') {
-        requireAdminRole();
+        requireExamManagerRole();
         $exam_id = $input['exam_id'] ?? $_POST['exam_id'] ?? '';
         if (empty($exam_id)) {
             http_response_code(400);
@@ -516,12 +530,14 @@ try {
             exit;
         }
 
+        finalizeExamSessionsOnClose($pdo, (int)$exam_id);
+
         $activeSessions = examHasActiveSessions($pdo, (int)$exam_id);
         if ($activeSessions > 0) {
             http_response_code(409);
             echo json_encode([
                 'success' => false,
-                'message' => "Cannot archive exam while {$activeSessions} examinee session(s) are still in progress.",
+                'message' => "Cannot archive exam while {$activeSessions} trainee session(s) are still in progress.",
             ]);
             exit;
         }
@@ -547,8 +563,9 @@ try {
         exit;
     }
 
-    // Restore archived exam (Admin or CCMD)
+    // Restore archived exam (Admin only)
     if ($request_method === 'POST' && $action === 'restore') {
+        requireExamManagerRole();
         if (!$hasExamCode) {
             http_response_code(503);
             echo json_encode(['success' => false, 'message' => 'Archive feature is not available. Run the database migration.']);
@@ -580,7 +597,7 @@ try {
 
     // Reopen a closed exam and reset stale examinee sessions
     if ($request_method === 'POST' && $action === 'reopen') {
-        requireAdminRole();
+        requireExamManagerRole();
         $exam_id = $input['exam_id'] ?? $_POST['exam_id'] ?? '';
         if (empty($exam_id)) {
             http_response_code(400);
@@ -626,6 +643,13 @@ try {
             exit;
         }
 
+        $publishError = validateExamPublishRequirements($pdo, (int)$exam_id);
+        if ($publishError !== null) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => $publishError]);
+            exit;
+        }
+
         $pdo->beginTransaction();
 
         $stmt = $pdo->prepare('
@@ -648,13 +672,14 @@ try {
             'REOPEN_EXAM',
             "Exam \"{$examLabel}\" reopened ({$sessionStats['active_reset']} in-progress reset, "
             . "{$sessionStats['active_removed']} empty in-progress removed, "
-            . "{$sessionStats['void_removed']} no-answer attempt(s) cleared)"
+            . "{$sessionStats['void_removed']} never-started placeholder(s) cleared, "
+            . "{$sessionStats['expired_finalized']} expired attempt(s) finalized)"
         );
 
         http_response_code(200);
         echo json_encode([
             'success' => true,
-            'message' => 'Exam reopened successfully. No-answer failures and empty in-progress attempts were cleared; other in-progress attempts were reset.',
+            'message' => 'Exam reopened successfully.',
             'session_stats' => $sessionStats,
         ]);
         exit;
@@ -662,7 +687,7 @@ try {
 
     // Close exam
     if ($request_method === 'POST' && $action === 'close') {
-        requireAdminRole();
+        requireExamManagerRole();
         $exam_id = $input['exam_id'] ?? $_POST['exam_id'] ?? '';
         if (empty($exam_id)) {
             http_response_code(400);
@@ -670,20 +695,42 @@ try {
             exit;
         }
 
-        $stmt = $pdo->prepare("UPDATE tbl_exam SET Status = 'Closed' WHERE Exam_ID = ?");
-        $stmt->execute([$exam_id]);
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare("UPDATE tbl_exam SET Status = 'Closed' WHERE Exam_ID = ?");
+            $stmt->execute([$exam_id]);
+
+            $sessionStats = finalizeExamSessionsOnClose($pdo, (int)$exam_id);
+
+            $pdo->commit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
 
         $examLabel = auditExamLabel($pdo, (int)$exam_id);
-        logExamAuditAction($pdo, (int)$_SESSION['user_id'], 'CLOSE_EXAM', "Exam \"{$examLabel}\" closed");
+        logExamAuditAction(
+            $pdo,
+            (int)$_SESSION['user_id'],
+            'CLOSE_EXAM',
+            "Exam \"{$examLabel}\" closed ({$sessionStats['auto_submitted']} submitted, "
+            . "{$sessionStats['empty_removed']} empty in-progress cleared)"
+        );
 
         http_response_code(200);
-        echo json_encode(['success' => true, 'message' => 'Exam closed successfully']);
+        echo json_encode([
+            'success' => true,
+            'message' => 'Exam closed successfully',
+            'sessions_finalized' => $sessionStats,
+        ]);
         exit;
     }
 
     // Toggle response review (examinee question breakdown after submission)
     if ($request_method === 'POST' && $action === 'toggle_response_review') {
-        requireAdminRole();
+        requireExamManagerRole();
         if (!$hasResponseReview) {
             http_response_code(503);
             echo json_encode(['success' => false, 'message' => 'Response review feature is not available. Run the database migration.']);
@@ -723,9 +770,84 @@ try {
         exit;
     }
 
+    // One exam per section: keep this exam on the first section, clone the rest.
+    if ($request_method === 'POST' && $action === 'split_to_sections') {
+        requireExamManagerRole();
+        $examId = (int)($input['exam_id'] ?? 0);
+        $sectionIds = $input['section_ids'] ?? [];
+        if (!is_array($sectionIds)) {
+            $sectionIds = [];
+        }
+
+        if ($examId <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Exam ID is required']);
+            exit;
+        }
+
+        $stmt = $pdo->prepare('SELECT Exam_ID, Title FROM tbl_exam WHERE Exam_ID = ?');
+        $stmt->execute([$examId]);
+        $source = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$source) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Exam not found']);
+            exit;
+        }
+
+        $duplicateSectionError = detectDuplicateSectionIds($sectionIds);
+        if ($duplicateSectionError !== null) {
+            http_response_code(409);
+            echo json_encode(['success' => false, 'message' => $duplicateSectionError]);
+            exit;
+        }
+
+        $questionIds = null;
+        if (array_key_exists('question_ids', $input)) {
+            $questionIds = is_array($input['question_ids']) ? $input['question_ids'] : [];
+        }
+
+        $pdo->beginTransaction();
+        try {
+            if ($questionIds !== null) {
+                replaceExamQuestionAssignments($pdo, $examId, $questionIds);
+            }
+            $created = splitExamToSections($pdo, $examId, $sectionIds);
+            $pdo->commit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        $cloneCount = max(0, count($created) - 1);
+        $title = (string)($source['Title'] ?? '');
+        logExamAuditAction(
+            $pdo,
+            (int)$_SESSION['user_id'],
+            'SPLIT_EXAM_SECTIONS',
+            $cloneCount > 0
+                ? "Exam \"{$title}\" split into " . count($created) . " exams (one per section)"
+                : "Exam \"{$title}\" assigned to one section"
+        );
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'message' => $cloneCount > 0
+                ? ('Created ' . count($created) . ' exams (one per section)')
+                : 'Section assigned',
+            'data' => [
+                'exams' => $created,
+                'exam_ids' => array_map(static fn(array $row) => (int)$row['exam_id'], $created),
+            ],
+        ]);
+        exit;
+    }
+
     // Delete exam — disabled; use archive instead
     if ($request_method === 'POST' && $action === 'delete') {
-        requireAdminRole();
+        requireExamManagerRole();
         require_once __DIR__ . '/../includes/archive-utils.php';
         archiveDeletionBlockedResponse();
     }
@@ -733,7 +855,8 @@ try {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Invalid action']);
 } catch (Exception $e) {
+    error_log('exams.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }
 ?>

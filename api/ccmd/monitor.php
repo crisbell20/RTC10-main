@@ -1,7 +1,6 @@
 <?php
-/**
- * CCMD Live Exam Monitoring API
- */
+
+// CCMD - Live Exam Monitoring API
 
 header('Content-Type: application/json');
 session_start();
@@ -162,8 +161,13 @@ try {
                     SUM(CASE WHEN es.Time_Ended IS NULL AND es.Time_Started IS NOT NULL THEN 1 ELSE 0 END) AS in_progress,
                     SUM(CASE WHEN es.Time_Ended IS NOT NULL THEN 1 ELSE 0 END) AS completed
                 FROM tbl_exam_session es
-                WHERE es.Exam_ID = ?
-                  AND es.User_ID IN ({$idPlaceholders})
+                INNER JOIN (
+                    SELECT User_ID, MAX(Session_ID) AS Session_ID
+                    FROM tbl_exam_session
+                    WHERE Exam_ID = ?
+                      AND User_ID IN ({$idPlaceholders})
+                    GROUP BY User_ID
+                ) latest ON latest.Session_ID = es.Session_ID
             ");
             $stmt->execute(array_merge([$examId], $participantIds));
             $counts = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
@@ -239,10 +243,10 @@ try {
         foreach ($participants as $participant) {
             $userId = (int)$participant['User_ID'];
             $fullname = (string)($participant['Fullname'] ?? '');
-            $academic = (string)($participant['Academic_Number'] ?? '');
+            $badge = (string)($participant['Badge_Number'] ?? '');
 
             if ($searchLower !== '') {
-                $haystack = strtolower($fullname . ' ' . $academic);
+                $haystack = strtolower($fullname . ' ' . $badge);
                 if (strpos($haystack, $searchLower) === false) {
                     continue;
                 }
@@ -287,14 +291,17 @@ try {
 
             $timeRemaining = ($status === 'in_progress')
                 ? formatTimeRemaining($timeStarted, $duration)
-                : null;
+                : ($status === 'not_started'
+                    ? ['seconds' => 0, 'display' => '00:00:00', 'expired' => false]
+                    : null);
 
             $processed[] = [
                 'User_ID' => $userId,
                 'Fullname' => $fullname,
-                'Academic_Number' => $academic,
+                'Badge_Number' => $badge,
                 'Session_ID' => $sessionId,
                 'batch_names' => (string)($participant['Batch_Name'] ?? ''),
+                'section_names' => (string)($participant['Section_Name'] ?? ''),
                 'status' => $status,
                 'answered_count' => $answered,
                 'question_count' => $questionCount,
@@ -337,8 +344,8 @@ try {
     sendError('Invalid action');
 } catch (PDOException $e) {
     error_log('CCMD monitor.php DB error: ' . $e->getMessage());
-    sendError('Database error', 500);
+    sendError('An unexpected error occurred. Please try again later.', 500);
 } catch (Exception $e) {
     error_log('CCMD monitor.php error: ' . $e->getMessage());
-    sendError('Server error', 500);
+    sendError('An unexpected error occurred. Please try again later.', 500);
 }

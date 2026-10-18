@@ -23,7 +23,7 @@ if (!moduleSchemaEnabled($pdo)) {
     http_response_code(503);
     echo json_encode([
         'success' => false,
-        'message' => 'Module schema is not installed. Run scripts/migrations/run_course_modules_migration.php',
+        'message' => 'Module schema is not installed. Import scripts/migrations/add_course_modules.sql on the database.',
     ]);
     exit;
 }
@@ -69,7 +69,7 @@ try {
         ");
         $subjectActive = activeArchiveCondition($pdo, 'tbl_subject');
         $subjectStmt = $pdo->prepare("
-            SELECT Subject_ID, Module_ID, Subject_Name, Subject_Code, Description
+            SELECT Subject_ID, Module_ID, Subject_Name, Description
             FROM tbl_subject
             WHERE Module_ID = ? AND {$subjectActive}
             ORDER BY Subject_Name
@@ -115,7 +115,7 @@ try {
             $sort = (int)$maxStmt->fetchColumn() + 1;
         }
 
-        $stmt = $pdo->prepare('INSERT INTO tbl_module (Course_ID, Module_Name, Module_Code, Description, Sort_Order) VALUES (?, ?, NULL, ?, ?)');
+        $stmt = $pdo->prepare('INSERT INTO tbl_module (Course_ID, Module_Name, Description, Sort_Order) VALUES (?, ?, ?, ?)');
         $stmt->execute([$course_id, $name, $desc, $sort]);
         $moduleId = (int)$pdo->lastInsertId();
 
@@ -127,7 +127,8 @@ try {
     if ($request_method === 'POST' && $action === 'update') {
         $module_id = (int)($input['module_id'] ?? $_POST['module_id'] ?? 0);
         $name = trim($input['module_name'] ?? $_POST['module_name'] ?? '');
-        $desc = $input['description'] ?? $_POST['description'] ?? null;
+        $hasDescription = array_key_exists('description', $input) || array_key_exists('description', $_POST);
+        $desc = $hasDescription ? ($input['description'] ?? $_POST['description'] ?? null) : null;
         $sort = isset($input['sort_order']) ? (int)$input['sort_order'] : null;
 
         if ($module_id <= 0 || $name === '') {
@@ -145,12 +146,18 @@ try {
             exit;
         }
 
-        if ($sort !== null) {
+        if ($sort !== null && $hasDescription) {
             $stmt = $pdo->prepare('UPDATE tbl_module SET Module_Name = ?, Description = ?, Sort_Order = ? WHERE Module_ID = ?');
             $stmt->execute([$name, $desc, $sort, $module_id]);
-        } else {
+        } elseif ($sort !== null) {
+            $stmt = $pdo->prepare('UPDATE tbl_module SET Module_Name = ?, Sort_Order = ? WHERE Module_ID = ?');
+            $stmt->execute([$name, $sort, $module_id]);
+        } elseif ($hasDescription) {
             $stmt = $pdo->prepare('UPDATE tbl_module SET Module_Name = ?, Description = ? WHERE Module_ID = ?');
             $stmt->execute([$name, $desc, $module_id]);
+        } else {
+            $stmt = $pdo->prepare('UPDATE tbl_module SET Module_Name = ? WHERE Module_ID = ?');
+            $stmt->execute([$name, $module_id]);
         }
 
         auditFromSession($pdo, 'COURSE', 'UPDATE_MODULE', "Module \"{$name}\" updated", 'SUCCESS', 'module', $module_id);
@@ -166,6 +173,17 @@ try {
             exit;
         }
 
+        $subjectIds = subjectIdsForModule($pdo, $module_id);
+        $activeSessions = countActiveExamSessionsForSubjects($pdo, $subjectIds);
+        if ($activeSessions > 0) {
+            http_response_code(409);
+            echo json_encode([
+                'success' => false,
+                'message' => "Cannot archive module while {$activeSessions} trainee session(s) are still in progress.",
+            ]);
+            exit;
+        }
+
         $result = archiveModuleWithSubjects($pdo, $module_id);
         if (!$result['module']) {
             http_response_code(400);
@@ -176,12 +194,16 @@ try {
         $label = auditModuleLabel($pdo, $module_id);
         $auditOutcome = "Module \"{$label}\" archived";
         if ($result['subjects'] > 0) {
-            $auditOutcome .= " ({$result['subjects']} subject(s) also archived)";
+            $auditOutcome .= " ({$result['subjects']} subject(s)";
+            if (!empty($result['exams'])) {
+                $auditOutcome .= ", {$result['exams']} exam(s)";
+            }
+            $auditOutcome .= ' also archived)';
         }
         auditFromSession($pdo, 'COURSE', 'ARCHIVE_MODULE', $auditOutcome, 'SUCCESS', 'module', $module_id);
         echo json_encode([
             'success' => true,
-            'message' => formatCascadeArchiveMessage('module', ['subjects' => $result['subjects']]),
+            'message' => formatCascadeArchiveMessage('module', $result),
             'cascade' => $result,
         ]);
         exit;
@@ -205,23 +227,21 @@ try {
             exit;
         }
 
-        if (!restoreRecord($pdo, 'tbl_module', 'Module_ID', $module_id)) {
+        $result = restoreModuleWithSubjects($pdo, $module_id);
+        if (!$result['module']) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => restoreFailureMessage($pdo, 'tbl_module', 'Module_ID', $module_id, 'module')]);
             exit;
         }
 
-        $ancestors = restoreCurriculumAncestors($pdo, null, (int)$meta['Course_ID']);
-
         $label = auditModuleLabel($pdo, $module_id);
         auditFromSession($pdo, 'COURSE', 'RESTORE_MODULE', "Module \"{$label}\" restored", 'SUCCESS', 'module', $module_id);
 
-        $message = 'Module restored successfully. Subjects remain archived until restored individually from Archive.';
-        if (!empty($ancestors)) {
-            $message = 'Module restored successfully (parent ' . implode(' and ', $ancestors) . ' also restored). Subjects remain archived until restored individually from Archive.';
-        }
-
-        echo json_encode(['success' => true, 'message' => $message]);
+        echo json_encode([
+            'success' => true,
+            'message' => formatCascadeRestoreMessage('module', $result),
+            'cascade' => $result,
+        ]);
         exit;
     }
 
@@ -237,9 +257,11 @@ try {
         echo json_encode(['success' => false, 'message' => 'Module already exists for this course']);
         exit;
     }
+    error_log('modules.php DB error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 } catch (Exception $e) {
+    error_log('modules.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }

@@ -1,4 +1,3 @@
-/* Custom CSS for PNP RTC Examination System */
 :root {
     --primary-color: #1a3a52;
     --secondary-color: #CE1126;
@@ -155,5 +154,47 @@ body {
 
     .login-form-container {
         padding: 1.5rem !important;
+    }
+}
+
+/* Login captcha: keep the popup inside the screen on phones */
+.swal2-popup.login-captcha-popup {
+    box-sizing: border-box;
+    max-width: calc(100vw - 2rem);
+    overflow-x: hidden;
+}
+
+.swal2-popup.login-captcha-popup .swal2-html-container.login-captcha-body {
+    overflow-x: hidden;
+    margin-left: 1rem;
+    margin-right: 1rem;
+}
+
+.swal2-popup.login-captcha-popup .captcha-answer {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    margin: 0.75rem 0 0;
+    min-height: 44px;
+    font-size: 16px;
+}
+
+@media (max-width: 480px) {
+    .swal2-popup.login-captcha-popup .swal2-actions.login-captcha-actions {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
+        box-sizing: border-box;
+        margin-left: 0;
+        margin-right: 0;
+        padding: 0 1rem;
+        gap: 0.5rem;
+    }
+
+    .swal2-popup.login-captcha-popup .swal2-actions.login-captcha-actions .swal2-styled {
+        width: 100%;
+        margin: 0;
     }
 }

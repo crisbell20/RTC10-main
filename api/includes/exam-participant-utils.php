@@ -1,9 +1,8 @@
 <?php
 
-/**
- * Per-exam participant allowlist helpers.
- * Sections define the pool; tbl_exam_participant defines who may access the exam.
- */
+require_once __DIR__ . '/person-name-utils.php';
+
+// Per-exam participant allowlist
 
 function examParticipantTableExists(PDO $pdo): bool
 {
@@ -22,9 +21,6 @@ function examParticipantTableExists(PDO $pdo): bool
     return $exists;
 }
 
-/**
- * Section IDs covered by an exam's batch assignments (enrollment or parent batch).
- */
 function getExamAssignedSectionIds(PDO $pdo, int $examId): array
 {
     if ($examId <= 0) {
@@ -50,40 +46,52 @@ function getExamAssignedSectionIds(PDO $pdo, int $examId): array
     return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
 }
 
-function getEligibleExamParticipants(PDO $pdo, int $examId): array
+function getEligibleParticipantsBySectionIds(PDO $pdo, array $sectionIds): array
 {
-    if ($examId <= 0) {
-        return [];
-    }
-
-    $sectionIds = getExamAssignedSectionIds($pdo, $examId);
+    $sectionIds = array_values(array_unique(array_filter(array_map('intval', $sectionIds), static function ($id) {
+        return $id > 0;
+    })));
     if (empty($sectionIds)) {
         return [];
     }
 
+    require_once __DIR__ . '/archive-utils.php';
+
     $placeholders = implode(',', array_fill(0, count($sectionIds), '?'));
+    $userActive = activeArchiveCondition($pdo, 'tbl_user', 'u');
+    $sectionActive = activeArchiveCondition($pdo, 'tbl_academic_section', 'sec');
+
+    // Match Active examinees enrolled on the section's enrollment batch OR its parent batch.
     $sql = "
         SELECT DISTINCT
             u.User_ID,
-            u.Fullname,
-            u.Academic_Number,
+            " . personNameSql('u') . " AS Fullname,
+            u.Badge_Number,
             ub.Status AS Enrollment_Status,
             sec.Section_ID,
             sec.Section_Name,
             COALESCE(pb.Batch_Name, parent_b.Batch_Name, enroll_b.Batch_Name) AS Batch_Name,
             c.Course_Name
         FROM tbl_academic_section sec
-        INNER JOIN tbl_batch enroll_b ON enroll_b.Section_ID = sec.Section_ID
-        INNER JOIN tbl_user_batch ub ON ub.Batch_ID = enroll_b.Batch_ID
+        INNER JOIN tbl_batch parent_b ON sec.Batch_ID = parent_b.Batch_ID
+        INNER JOIN tbl_course c ON parent_b.Course_ID = c.Course_ID
+        INNER JOIN tbl_user_batch ub ON ub.Status = 'Active'
+        INNER JOIN tbl_batch enroll_b ON ub.Batch_ID = enroll_b.Batch_ID
         INNER JOIN tbl_user u ON ub.User_ID = u.User_ID
         INNER JOIN tbl_role r ON u.Role_ID = r.Role_ID
-        INNER JOIN tbl_batch parent_b ON sec.Batch_ID = parent_b.Batch_ID
         LEFT JOIN tbl_batch pb ON sec.Batch_ID = pb.Batch_ID
-        INNER JOIN tbl_course c ON parent_b.Course_ID = c.Course_ID
         WHERE sec.Section_ID IN ({$placeholders})
-          AND ub.Status = 'Active'
+          AND {$sectionActive}
+          AND {$userActive}
           AND r.Role_Name = 'Examinee'
-        ORDER BY c.Course_Name, Batch_Name, sec.Section_Name, u.Fullname
+          AND (
+              enroll_b.Section_ID = sec.Section_ID
+              OR (
+                  (enroll_b.Section_ID IS NULL OR enroll_b.Section_ID = 0)
+                  AND enroll_b.Batch_ID = sec.Batch_ID
+              )
+          )
+        ORDER BY c.Course_Name, Batch_Name, sec.Section_Name, " . personNameSql('u') . "
     ";
 
     $stmt = $pdo->prepare($sql);
@@ -102,6 +110,15 @@ function getEligibleExamParticipants(PDO $pdo, int $examId): array
     }
 
     return $participants;
+}
+
+function getEligibleExamParticipants(PDO $pdo, int $examId): array
+{
+    if ($examId <= 0) {
+        return [];
+    }
+
+    return getEligibleParticipantsBySectionIds($pdo, getExamAssignedSectionIds($pdo, $examId));
 }
 
 /**
@@ -153,8 +170,8 @@ function fetchParticipantUsersByIds(PDO $pdo, array $userIds): array
     $sql = "
         SELECT DISTINCT
             u.User_ID,
-            u.Fullname,
-            u.Academic_Number,
+            " . personNameSql('u') . " AS Fullname,
+            u.Badge_Number,
             ub.Status AS Enrollment_Status,
             COALESCE(sec.Section_ID, 0) AS Section_ID,
             COALESCE(sec.Section_Name, b.Batch_Name) AS Section_Name,
@@ -170,7 +187,7 @@ function fetchParticipantUsersByIds(PDO $pdo, array $userIds): array
         WHERE u.User_ID IN ({$placeholders})
           AND ub.Status = 'Active'
           AND r.Role_Name = 'Examinee'
-        ORDER BY c.Course_Name, Batch_Name, Section_Name, u.Fullname
+        ORDER BY c.Course_Name, Batch_Name, Section_Name, " . personNameSql('u') . "
     ";
 
     $stmt = $pdo->prepare($sql);
@@ -331,7 +348,7 @@ function syncExamParticipantsFromSections(PDO $pdo, int $examId): array
 function saveExamParticipants(PDO $pdo, int $examId, array $userIds): array
 {
     if (!examParticipantTableExists($pdo)) {
-        throw new RuntimeException('Participant table is not available. Run the exam participants migration first.');
+        throw new RuntimeException('Participant table is not available. Import scripts/migrations/add_exam_participants.sql on the database first.');
     }
 
     $eligible = getEligibleExamParticipants($pdo, $examId);
@@ -399,8 +416,14 @@ function attachExamParticipantCounts(PDO $pdo, array &$exams): void
 
     foreach ($exams as &$exam) {
         $examId = (int)($exam['Exam_ID'] ?? 0);
-        $exam['Participant_Count'] = $counts[$examId] ?? 0;
-        $exam['Eligible_Participant_Count'] = count(getEligibleExamParticipants($pdo, $examId));
+        $selected = $counts[$examId] ?? 0;
+        $eligible = getEligibleExamParticipants($pdo, $examId);
+        if ($selected > 0) {
+            $selectedIds = getExamParticipantIds($pdo, $examId);
+            $eligible = mergeEligibleWithSavedParticipants($pdo, $eligible, $selectedIds);
+        }
+        $exam['Participant_Count'] = $selected;
+        $exam['Eligible_Participant_Count'] = count($eligible);
     }
     unset($exam);
 }
@@ -426,7 +449,7 @@ function groupEligibleParticipantsBySection(array $eligible, array $selectedIds)
         $groups[$sectionKey]['participants'][] = [
             'user_id' => $userId,
             'fullname' => $row['Fullname'] ?? '',
-            'academic_number' => $row['Academic_Number'] ?? '',
+            'badge_number' => $row['Badge_Number'] ?? '',
             'is_selected' => isset($selectedSet[$userId]),
         ];
     }

@@ -1,5 +1,3 @@
-const DEFAULT_EXAMINEE_PASSWORD = 'PNP@rtc10';
-
 const PASSWORD_POLICY_MESSAGE = 'Password must be at least 8 characters and include upper, lower, number, and special character';
 
 const PASSWORD_POLICY_RULES = [

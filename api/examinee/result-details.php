@@ -1,14 +1,15 @@
 <?php
-/**
- * Result Details API
- * Fetches detailed exam results including questions and answers
- */
+
+// Examinee Result Details API
 
 header('Content-Type: application/json');
 session_start();
 
 require_once '../config/connection-pdo.php';
+/** @var PDO $pdo */
 require_once '../includes/exam-code-utils.php';
+require_once '../includes/exam-session-utils.php';
+require_once '../includes/archive-utils.php';
 
 function sendSuccess($data = []) {
     http_response_code(200);
@@ -41,7 +42,8 @@ try {
     $hasResponseReview = responseReviewColumnExists($pdo);
     $reviewSelect = $hasResponseReview ? 'e.Allow_Response_Review,' : '';
     
-    // Get result summary - simplified query first
+    // Get result summary — hide when exam/subject/course is archived
+    $activeCurriculum = examineeActiveResultCurriculumCondition($pdo, 'e', 's', 'c');
     $stmt = $pdo->prepare("
         SELECT 
             r.Result_ID,
@@ -59,7 +61,10 @@ try {
         FROM tbl_result r
         INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
         INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
+        INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
+        INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
         WHERE r.Result_ID = ? AND es.User_ID = ?
+          AND {$activeCurriculum}
     ");
     
     if (!$stmt->execute([$resultId, $userId])) {
@@ -98,20 +103,15 @@ try {
         $result['Course_Name'] = $examDetails['Course_Name'] ?? '';
     }
     
-    // Calculate time taken
-    if ($result['Time_Started'] && $result['Time_Ended']) {
-        $start = strtotime($result['Time_Started']);
-        $end = strtotime($result['Time_Ended']);
-        $diff = $end - $start;
-        
-        $hours = floor($diff / 3600);
-        $minutes = floor(($diff % 3600) / 60);
-        $seconds = $diff % 60;
-        
-        $result['time_taken'] = sprintf('%02d:%02d:%02d', $hours, $minutes, $seconds);
-    } else {
-        $result['time_taken'] = 'N/A';
-    }
+    $result['time_taken'] = formatExamTimeTaken(
+        $result['Time_Started'] ?? null,
+        $result['Time_Ended'] ?? null,
+        countExamSessionAnswers(
+            $pdo,
+            (int)($result['Session_ID'] ?? 0),
+            (int)($result['Exam_ID'] ?? 0)
+        )
+    );
     
     // Set defaults for optional fields
     $result['exam_description'] = $result['exam_description'] ?? '';
@@ -129,10 +129,20 @@ try {
     ');
     $stmt->execute([$result['Exam_ID']]);
     $totalData = $stmt->fetch(PDO::FETCH_ASSOC);
-    $result['total_questions'] = $totalData['total'];
+    $result['total_questions'] = (int)($totalData['total'] ?? 0);
+    if (empty($result['Time_Ended'])) {
+        $result['is_in_progress'] = true;
+        $result['is_latest'] = false;
+        $result['attempt_number'] = null;
+        $result['Remarks'] = 'In progress';
+        $result['status'] = 'In progress';
+    } else {
+        $result['is_in_progress'] = false;
+        applyExamineeGradeToResult($result);
+    }
 
     if (!$reviewAllowed) {
-        $result['review_message'] = 'Your instructor has disabled response review for this exam. You can see your score summary only.';
+        $result['review_message'] = 'Response viewing for this exam has been disabled. You can see your score summary only.';
         sendSuccess($result);
     }
     
@@ -181,16 +191,32 @@ try {
     }
     
     $result['questions'] = $questions;
-    
+
+    $historyFinished = finishedSittingPredicateSql('es_hist');
+    $historyStmt = $pdo->prepare("
+        SELECT r_hist.Result_ID, r_hist.Submission_Date, es_hist.Exam_ID, es_hist.Time_Started, es_hist.Time_Ended
+        FROM tbl_result r_hist
+        INNER JOIN tbl_exam_session es_hist ON es_hist.Session_ID = r_hist.Session_ID
+        WHERE es_hist.Exam_ID = ? AND es_hist.User_ID = ? AND {$historyFinished}
+    ");
+    $historyStmt->execute([(int)$result['Exam_ID'], (int)$userId]);
+    foreach (annotateAttemptHistory($historyStmt->fetchAll(PDO::FETCH_ASSOC)) as $historyRow) {
+        if ((int)$historyRow['Result_ID'] === (int)$result['Result_ID']) {
+            $result['attempt_number'] = (int)$historyRow['attempt_number'];
+            $result['is_latest'] = !empty($historyRow['is_latest']);
+            break;
+        }
+    }
+
     sendSuccess($result);
     
 } catch (PDOException $e) {
     error_log("PDO Error in result-details.php: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
-    sendError('Database error: ' . $e->getMessage(), 500);
+    sendError('An unexpected error occurred. Please try again later.', 500);
 } catch (Exception $e) {
     error_log("Error in result-details.php: " . $e->getMessage());
     error_log("Stack trace: " . $e->getTraceAsString());
-    sendError('Failed to fetch result details: ' . $e->getMessage(), 500);
+    sendError('An unexpected error occurred. Please try again later.', 500);
 }
 ?>

@@ -5,40 +5,52 @@ function reportsLink(path) {
     return `${base}${path}`;
 }
 
+function reportsResponsesLink(examId) {
+    return reportsLink(`exam-responses.php?exam_id=${examId}&return=reports&tab=${currentTab}`);
+}
+
 let performanceChart, passFailChart, subjectsChart, weakSubjectsChart;
 let currentTab = 'overview';
-let studentSummaryData = [];
+let traineeSummaryData = [];
+let traineeSummaryMeta = { mode: 'all' };
 let subjectSummaryData = [];
-let atRiskData = [];
 let overviewMetrics = {};
 let performanceTrendData = [];
 let topSubjectsData = [];
 let weakSubjectsData = [];
-let studentDetailModal, subjectDetailModal;
+let traineeDetailModal, subjectDetailModal;
 let filterTimer = null;
 let reportsLoading = false;
 
 document.addEventListener('DOMContentLoaded', () => {
-    studentDetailModal = new bootstrap.Modal(document.getElementById('studentDetailModal'));
+    traineeDetailModal = new bootstrap.Modal(document.getElementById('traineeDetailModal'));
     subjectDetailModal = new bootstrap.Modal(document.getElementById('subjectDetailModal'));
 
     initializeCharts();
-    loadCourses();
+    loadCourses().then(() => loadSubjects());
     loadBatches();
     bindEvents();
     updateFilterChips();
     updateExportButton();
-    loadReports();
+    const urlTab = new URLSearchParams(window.location.search).get('tab');
+    loadReports().then(() => {
+        if (urlTab && ['overview', 'trainees', 'students', 'subjects'].includes(urlTab)) {
+            switchTab(urlTab === 'students' ? 'trainees' : urlTab);
+        }
+    });
 });
 
 function bindEvents() {
     document.getElementById('exportReportBtn')?.addEventListener('click', exportReport);
     document.getElementById('clearFiltersBtn')?.addEventListener('click', clearFilters);
-    document.getElementById('viewAllAtRiskBtn')?.addEventListener('click', viewAllAtRisk);
+    document.getElementById('traineeSummaryBody')?.addEventListener('click', handleReportTraineeRowClick);
+    document.getElementById('subjectSummaryBody')?.addEventListener('click', handleReportSubjectRowClick);
 
     document.getElementById('filterCourse')?.addEventListener('change', async function() {
         document.getElementById('filterBatch').value = '';
+        document.getElementById('filterSubject').value = '';
         await loadBatches(this.value);
+        await loadSubjects(this.value);
         resetSectionFilter();
         scheduleReportsReload();
     });
@@ -52,7 +64,12 @@ function bindEvents() {
         scheduleReportsReload();
     });
 
-    document.getElementById('studentStatusFilter')?.addEventListener('change', loadStudentSummary);
+    document.getElementById('filterSubject')?.addEventListener('change', () => {
+        scheduleReportsReload();
+    });
+
+    document.getElementById('traineeStatusFilter')?.addEventListener('change', loadTraineeSummary);
+    document.getElementById('subjectSortFilter')?.addEventListener('change', renderSubjectSummaryTable);
 
     document.querySelectorAll('#reportTabs .nav-link').forEach(btn => {
         btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -64,9 +81,14 @@ function getFilterParams(extra = {}) {
         ...(document.getElementById('filterCourse').value && { course_id: document.getElementById('filterCourse').value }),
         ...(document.getElementById('filterBatch').value && { batch_id: document.getElementById('filterBatch').value }),
         ...(document.getElementById('filterSection').value && { section_id: document.getElementById('filterSection').value }),
+        ...(document.getElementById('filterSubject')?.value && { subject_id: document.getElementById('filterSubject').value }),
         ...extra
     });
     return params;
+}
+
+function isSubjectFilterActive() {
+    return Boolean(document.getElementById('filterSubject')?.value);
 }
 
 function scheduleReportsReload() {
@@ -106,14 +128,16 @@ function updateFilterChips() {
     const course = selectedOptionText('filterCourse');
     const batch = selectedOptionText('filterBatch');
     const section = selectedOptionText('filterSection');
+    const subject = selectedOptionText('filterSubject');
 
     if (course) chips.push({ label: 'Course', value: course });
     if (batch) chips.push({ label: 'Batch', value: batch });
     if (section) chips.push({ label: 'Section', value: section });
+    if (subject) chips.push({ label: 'Subject', value: subject });
 
     chipsEl.innerHTML = chips.length
         ? chips.map(c => `<span class="reports-filter-chip"><strong>${escapeHtml(c.label)}:</strong>&nbsp;${escapeHtml(c.value)}</span>`).join('')
-        : '<span class="text-muted small">Showing all courses and batches</span>';
+        : '<span class="text-muted small">Showing all courses, batches, and subjects</span>';
 
     clearBtn?.classList.toggle('d-none', chips.length === 0);
 }
@@ -121,8 +145,10 @@ function updateFilterChips() {
 async function clearFilters() {
     document.getElementById('filterCourse').value = '';
     document.getElementById('filterBatch').value = '';
+    document.getElementById('filterSubject').value = '';
     resetSectionFilter();
     await loadBatches();
+    await loadSubjects();
     updateFilterChips();
     loadReports();
 }
@@ -133,32 +159,29 @@ function switchTab(tab) {
         btn.classList.toggle('active', btn.dataset.tab === tab);
     });
     document.getElementById('tabOverview').style.display = tab === 'overview' ? 'block' : 'none';
-    document.getElementById('tabStudents').style.display = tab === 'students' ? 'block' : 'none';
+    document.getElementById('tabTrainees').style.display = tab === 'trainees' ? 'block' : 'none';
     document.getElementById('tabSubjects').style.display = tab === 'subjects' ? 'block' : 'none';
 
     updateExportButton();
 
-    if (tab === 'students') loadStudentSummary();
+    if (tab === 'trainees') loadTraineeSummary();
     if (tab === 'subjects') loadSubjectSummary();
 }
 
 function updateExportButton() {
     const btn = document.getElementById('exportReportBtn');
     if (!btn) return;
-
-    if (currentTab === 'overview') {
-        btn.innerHTML = '<i class="bi bi-download me-2"></i>Export Overview CSV';
-    } else if (currentTab === 'subjects') {
-        btn.innerHTML = '<i class="bi bi-download me-2"></i>Export Subjects CSV';
-    } else {
-        btn.innerHTML = '<i class="bi bi-download me-2"></i>Export Students CSV';
-    }
+    const showExport = currentTab === 'trainees' || currentTab === 'subjects';
+    btn.classList.toggle('d-none', !showExport);
+    btn.hidden = !showExport;
+    btn.innerHTML = '<i class="bi bi-download me-2"></i>Export';
 }
 
 function setReportsLoading(loading) {
     reportsLoading = loading;
     document.getElementById('reportsLoadingBar')?.classList.toggle('d-none', !loading);
     document.getElementById('metricsRow')?.classList.toggle('is-loading', loading);
+    document.getElementById('traineeMetricsRow')?.classList.toggle('is-loading', loading);
 }
 
 async function loadReports() {
@@ -168,15 +191,14 @@ async function loadReports() {
     try {
         const tasks = [
             loadMetrics(params),
-            loadAtRisk(params),
             loadPerformanceTrend(params),
             loadPassFail(params),
             loadTopSubjects(params),
             loadWeakSubjects(params)
         ];
 
-        if (currentTab === 'students') {
-            tasks.push(loadStudentSummary());
+        if (currentTab === 'trainees') {
+            tasks.push(loadTraineeSummary());
         } else if (currentTab === 'subjects') {
             tasks.push(loadSubjectSummary());
         }
@@ -187,10 +209,6 @@ async function loadReports() {
     } finally {
         setReportsLoading(false);
     }
-}
-
-function atRiskSummaryText() {
-    return 'Overdue untaken exams count as failed once the deadline passes. Upcoming exams are excluded. General rules: pass rate below 60%, 2+ effective failures, or average below 60%.';
 }
 
 function passFailPercentLabel(value, total) {
@@ -237,12 +255,89 @@ function passFailChartPluginOptions() {
     };
 }
 
+const subjectBarLabelPlugin = {
+    id: 'subjectBarLabelPlugin',
+    afterDatasetsDraw(chart) {
+        const rows = chart.options.plugins?.subjectBarLabelPlugin?.rows;
+        if (!rows?.length) {
+            return;
+        }
+
+        const { ctx } = chart;
+        const meta = chart.getDatasetMeta(0);
+
+        meta.data.forEach((bar, index) => {
+            const row = rows[index];
+            if (!row) {
+                return;
+            }
+
+            const avg = formatGrade(row.avg_grade ?? row.avg_score ?? row.avg_raw_score ?? 0);
+            const pass = formatGrade(row.pass_rate ?? 0);
+            const label = `${avg}% Average | ${pass}% Passing Rate`;
+
+            const barLeft = Math.min(bar.base, bar.x);
+            const barWidth = Math.abs(bar.x - bar.base);
+            if (barWidth < 48) {
+                return;
+            }
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(barLeft, bar.y - (bar.height / 2), barWidth, bar.height);
+            ctx.clip();
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '600 11px system-ui, -apple-system, "Segoe UI", sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, barLeft + 8, bar.y);
+            ctx.restore();
+        });
+    }
+};
+
+if (typeof Chart !== 'undefined' && Chart.register) {
+    Chart.register(subjectBarLabelPlugin);
+}
+
+function subjectBarChartOptions() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: {
+            legend: { display: false },
+            subjectBarLabelPlugin: { rows: [] },
+            tooltip: {
+                callbacks: {
+                    label: context => {
+                        const rows = context.chart.options.plugins?.subjectBarLabelPlugin?.rows || [];
+                        const row = rows[context.dataIndex];
+                        const avg = formatGrade(row?.avg_grade ?? row?.avg_score ?? context.parsed.x ?? 0);
+                        const pass = formatGrade(row?.pass_rate ?? 0);
+                        return `${avg}% Average | ${pass}% Passing Rate`;
+                    }
+                }
+            }
+        },
+        scales: { x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } } }
+    };
+}
+
+function updateSubjectBarChart(chart, rows) {
+    const isEmpty = !rows.length;
+    chart.data.labels = rows.map(i => truncateLabel(i.Subject_Name, 28));
+    chart.data.datasets[0].data = isEmpty ? [] : rows.map(i => parseFloat(i.avg_grade ?? i.avg_score ?? 0));
+    chart.options.plugins.subjectBarLabelPlugin = { rows };
+    chart.update();
+}
+
 function initializeCharts() {
     const chartDefaults = { responsive: true, maintainAspectRatio: false };
 
     performanceChart = new Chart(document.getElementById('performanceChart'), {
         type: 'line',
-        data: { labels: [], datasets: [{ label: 'Average Score (%)', data: [], borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.1)', tension: 0.4, fill: true }] },
+        data: { labels: [], datasets: [{ label: 'Average (%)', data: [], borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,0.1)', tension: 0.4, fill: true }] },
         options: {
             ...chartDefaults,
             scales: {
@@ -257,7 +352,10 @@ function initializeCharts() {
                             const row = performanceTrendData[idx];
                             return row?.exam_title || items[0]?.label || '';
                         },
-                        label: context => `Avg score: ${context.parsed.y}%`,
+                        label: context => {
+                            const grade = context.parsed.y;
+                            return `Average: ${grade}%`;
+                        },
                         afterLabel: context => {
                             const row = performanceTrendData[context.dataIndex];
                             if (!row) return '';
@@ -280,36 +378,16 @@ function initializeCharts() {
         options: { ...chartDefaults, plugins: passFailChartPluginOptions() }
     });
 
-    const subjectBarOptions = (dataRef) => ({
-        ...chartDefaults,
-        indexAxis: 'y',
-        plugins: {
-            legend: { display: false },
-            tooltip: {
-                callbacks: {
-                    label: context => {
-                        const row = dataRef[context.dataIndex];
-                        const attempts = row?.attempt_count;
-                        return attempts != null
-                            ? `Avg: ${context.parsed.x}% (${attempts} attempt${attempts === 1 ? '' : 's'})`
-                            : `Avg: ${context.parsed.x}%`;
-                    }
-                }
-            }
-        },
-        scales: { x: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } } }
-    });
-
     subjectsChart = new Chart(document.getElementById('subjectsChart'), {
         type: 'bar',
         data: { labels: [], datasets: [{ label: 'Avg %', data: [], backgroundColor: '#a855f7' }] },
-        options: subjectBarOptions(topSubjectsData)
+        options: subjectBarChartOptions()
     });
 
     weakSubjectsChart = new Chart(document.getElementById('weakSubjectsChart'), {
         type: 'bar',
         data: { labels: [], datasets: [{ label: 'Avg %', data: [], backgroundColor: '#ef4444' }] },
-        options: subjectBarOptions(weakSubjectsData)
+        options: subjectBarChartOptions()
     });
 }
 
@@ -371,67 +449,53 @@ async function loadSections(batchId = '') {
     select.disabled = false;
 }
 
+async function loadSubjects(courseId = '') {
+    const select = document.getElementById('filterSubject');
+    if (!select) {
+        return;
+    }
+
+    const previousValue = select.value;
+    const course = courseId || document.getElementById('filterCourse').value;
+    const url = course
+        ? `../../api/masterfiles/subjects.php?action=list&course_id=${encodeURIComponent(course)}`
+        : '../../api/masterfiles/subjects.php?action=list';
+    const res = await axios.get(url);
+
+    select.innerHTML = '<option value="">All subjects</option>';
+    (res.data.data || []).forEach(subject => {
+        const opt = document.createElement('option');
+        opt.value = subject.Subject_ID;
+        opt.textContent = subject.Subject_Name;
+        select.appendChild(opt);
+    });
+
+    if (previousValue && select.querySelector(`option[value="${previousValue}"]`)) {
+        select.value = previousValue;
+    }
+}
+
 async function loadMetrics(params) {
     const res = await axios.get(`${REPORTS_API}?action=metrics&${params}`);
     const d = res.data.data;
     overviewMetrics = d;
 
-    document.getElementById('activeExaminees').textContent = d.active_examinees;
+    document.getElementById('activeTrainees').textContent = d.active_examinees;
     document.getElementById('examsAdministered').textContent = d.exams_administered;
     document.getElementById('passRate').textContent = d.pass_rate + '%';
-    document.getElementById('avgScore').textContent = d.avg_score + '%';
+    document.getElementById('avgScore').textContent = `${formatGrade(d.avg_grade ?? d.avg_score)}%`;
 }
 
-async function loadAtRisk(params) {
-    const res = await axios.get(`${REPORTS_API}?action=at_risk&${params}`);
-    const payload = res.data.data || {};
-    const rows = payload.students || (Array.isArray(payload) ? payload : []);
-    const summary = payload.summary || null;
-    atRiskData = rows;
-    const tbody = document.getElementById('atRiskBody');
-    const summaryEl = document.getElementById('atRiskSummary');
-    const viewAllBtn = document.getElementById('viewAllAtRiskBtn');
-
-    if (summaryEl) {
-        if (summary) {
-            const total = summary.total_at_risk ?? summary.count ?? rows.length;
-            const displayed = summary.displayed ?? rows.length;
-            let text = `${total} at-risk (${summary.percent}% of ${summary.total_examinees} examinees with assigned exams)`;
-            if (total > displayed) {
-                text += ` — showing ${displayed} of ${total}`;
-            }
-            summaryEl.textContent = text;
-        } else {
-            summaryEl.textContent = atRiskSummaryText();
-        }
-    }
-
-    const totalAtRisk = summary?.total_at_risk ?? rows.length;
-    viewAllBtn?.classList.toggle('d-none', totalAtRisk <= 0);
-
-    if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">No at-risk students for the selected filters.</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = rows.map(r => `
-        <tr>
-            <td><strong>${escapeHtml(r.Fullname)}</strong><br><small class="text-muted">${escapeHtml(r.Academic_Number || '')}</small></td>
-            <td>${r.exams_assigned ?? '—'}</td>
-            <td>${r.exams_taken ?? 0}</td>
-            <td>${r.missing_overdue > 0 ? `<span class="text-danger fw-bold">${r.missing_overdue}</span>` : '0'}</td>
-            <td>${r.avg_percentage ?? 0}%</td>
-            <td>${r.pass_rate ?? 0}%</td>
-            <td>${statusBadge(r.status)}</td>
-            <td><button class="btn btn-sm btn-outline-primary" onclick="viewStudentDetail(${r.User_ID})">View</button></td>
-        </tr>
-    `).join('');
+function handleReportTraineeRowClick(event) {
+    const row = event.target.closest('tr[data-user-id]');
+    if (!row) return;
+    viewTraineeDetail(parseInt(row.dataset.userId, 10));
 }
 
-function viewAllAtRisk() {
-    const statusFilter = document.getElementById('studentStatusFilter');
-    if (statusFilter) statusFilter.value = 'at_risk';
-    switchTab('students');
+function handleReportSubjectRowClick(event) {
+    const row = event.target.closest('tr[data-subject-id]');
+    if (!row) return;
+    viewSubjectDetail(parseInt(row.dataset.subjectId, 10));
 }
 
 async function loadPerformanceTrend(params) {
@@ -440,7 +504,7 @@ async function loadPerformanceTrend(params) {
     const isEmpty = !performanceTrendData.length;
 
     performanceChart.data.labels = performanceTrendData.map(i => formatDate(i.date) || truncateLabel(i.exam_title, 18));
-    performanceChart.data.datasets[0].data = isEmpty ? [] : performanceTrendData.map(i => parseFloat(i.avg_score));
+    performanceChart.data.datasets[0].data = isEmpty ? [] : performanceTrendData.map(i => parseFloat(i.avg_grade ?? i.avg_score));
     performanceChart.update();
     setChartEmpty('performanceChart', 'performanceChartEmpty', isEmpty);
 }
@@ -460,72 +524,128 @@ async function loadPassFail(params) {
     const subtitle = document.getElementById('passFailSubtitle');
     if (subtitle) {
         subtitle.textContent = isEmpty
-            ? 'Due assigned exams in scope'
-            : `${total} due assigned exam${total === 1 ? '' : 's'} (matches Overall Pass Rate)`;
+            ? 'Exams in scope'
+            : `${total} exam${total === 1 ? '' : 's'} in scope`;
     }
 }
 
 async function loadTopSubjects(params) {
     const res = await axios.get(`${REPORTS_API}?action=top_subjects&${params}`);
     topSubjectsData = res.data.data || [];
-    const isEmpty = !topSubjectsData.length;
-
-    subjectsChart.data.labels = topSubjectsData.map(i => truncateLabel(i.Subject_Name, 28));
-    subjectsChart.data.datasets[0].data = isEmpty ? [] : topSubjectsData.map(i => parseFloat(i.avg_score));
-    subjectsChart.update();
-    setChartEmpty('subjectsChart', 'subjectsChartEmpty', isEmpty);
+    updateSubjectBarChart(subjectsChart, topSubjectsData);
+    setChartEmpty('subjectsChart', 'subjectsChartEmpty', !topSubjectsData.length);
 }
 
 async function loadWeakSubjects(params) {
     const res = await axios.get(`${REPORTS_API}?action=weak_subjects&${params}`);
     weakSubjectsData = res.data.data || [];
-    const isEmpty = !weakSubjectsData.length;
-
-    weakSubjectsChart.data.labels = weakSubjectsData.map(i => truncateLabel(i.Subject_Name, 28));
-    weakSubjectsChart.data.datasets[0].data = isEmpty ? [] : weakSubjectsData.map(i => parseFloat(i.avg_score));
-    weakSubjectsChart.update();
-    setChartEmpty('weakSubjectsChart', 'weakSubjectsChartEmpty', isEmpty);
+    updateSubjectBarChart(weakSubjectsChart, weakSubjectsData);
+    setChartEmpty('weakSubjectsChart', 'weakSubjectsChartEmpty', !weakSubjectsData.length);
 }
 
-async function loadStudentSummary(silent = false) {
+function renderTraineeRankingsRow(s) {
+    const standing = s.standing ?? '—';
+    const standingClass = standing === 1 ? 'reports-standing-badge is-top' : 'reports-standing-badge';
+    const rank = s.Personnel_Rank || '—';
+    return `<tr class="reports-clickable-row" data-user-id="${s.User_ID}">
+        <td><span class="${standingClass}">${standing}</span></td>
+        <td>${escapeHtml(String(rank))}</td>
+        <td>
+            <div class="fw-medium">${escapeHtml(s.Fullname)}</div>
+            <small class="text-muted">${escapeHtml(s.Badge_Number || '—')}</small>
+        </td>
+        <td>${s.exams_assigned ?? 0}</td>
+        <td>${s.exams_taken ?? 0}</td>
+        <td>${s.missing_overdue > 0 ? `<span class="text-danger fw-bold">${s.missing_overdue}</span>` : '0'}</td>
+        <td>${formatAvgScoreCell(s)}</td>
+        <td>${s.pass_rate ?? 0}%</td>
+        <td>${statusBadge(s.status)}</td>
+    </tr>`;
+}
+
+function traineeRankingsTableHead() {
+    return `<tr>
+        <th>Standing</th>
+        <th>Rank</th>
+        <th>Trainee</th>
+        <th>Assigned</th>
+        <th>Taken</th>
+        <th>Missing</th>
+        <th>Average</th>
+        <th>Pass Rate</th>
+        <th>Status</th>
+    </tr>`;
+}
+
+async function loadTraineeSummary(silent = false) {
     const params = getFilterParams({
-        student_status: document.getElementById('studentStatusFilter')?.value || 'all'
+        student_status: document.getElementById('traineeStatusFilter')?.value || 'all'
     });
     const res = await axios.get(`${REPORTS_API}?action=student_summary&${params}`);
-    studentSummaryData = res.data.data || [];
+    const payload = res.data.data || {};
+    traineeSummaryData = payload.students ?? (Array.isArray(payload) ? payload : []);
+    traineeSummaryMeta = payload.meta || { mode: isSubjectFilterActive() ? 'by_subject' : 'all' };
 
-    if (silent && currentTab !== 'students') {
+    if (silent && currentTab !== 'trainees') {
         return;
     }
 
-    const tbody = document.getElementById('studentSummaryBody');
-    const empty = document.getElementById('studentSummaryEmpty');
+    updateTraineeSummaryHeader(traineeSummaryMeta);
+    renderTraineeSummaryCards(traineeSummaryMeta.summary || {});
+    renderTraineeSummaryTable(traineeSummaryData, traineeSummaryMeta);
+}
 
-    if (!studentSummaryData.length) {
+function renderTraineeSummaryCards(summary = {}) {
+    const totalEl = document.getElementById('traineeTotalCount');
+    const onTrackEl = document.getElementById('traineeOnTrackCount');
+    const atRiskEl = document.getElementById('traineeAtRiskCount');
+
+    if (!totalEl || !onTrackEl || !atRiskEl) {
+        return;
+    }
+
+    totalEl.textContent = summary.total_examinees ?? 0;
+    onTrackEl.textContent = summary.on_track ?? 0;
+    atRiskEl.textContent = summary.at_risk ?? 0;
+}
+
+function updateTraineeSummaryHeader(meta = {}) {
+    const titleEl = document.getElementById('traineeSummaryTitle');
+    const subEl = document.getElementById('traineeSummarySub');
+    const isBySubject = meta.mode === 'by_subject';
+    const subjectName = meta.subject_name || selectedOptionText('filterSubject') || 'selected subject';
+
+    if (titleEl) {
+        titleEl.textContent = 'Trainee Rankings';
+    }
+    if (subEl) {
+        subEl.textContent = isBySubject
+            ? `Ranked by average grade in ${subjectName}`
+            : 'Ranked by average grade';
+    }
+}
+
+function renderTraineeSummaryTable(rows, meta = {}) {
+    const tbody = document.getElementById('traineeSummaryBody');
+    const empty = document.getElementById('traineeSummaryEmpty');
+    const head = document.getElementById('traineeSummaryHead');
+    const isBySubject = meta.mode === 'by_subject';
+
+    if (head) {
+        head.innerHTML = traineeRankingsTableHead();
+    }
+
+    if (!rows.length) {
         tbody.innerHTML = '';
         empty.style.display = 'block';
+        empty.textContent = isBySubject
+            ? 'No trainees with assigned exams for this subject in the selected scope.'
+            : 'No trainee data for selected filters.';
         return;
     }
+
     empty.style.display = 'none';
-    tbody.innerHTML = studentSummaryData.map(s => `
-        <tr>
-            <td>
-                <div class="fw-medium">${escapeHtml(s.Fullname)}</div>
-                <small class="text-muted">${escapeHtml(s.Academic_Number || '')}</small>
-            </td>
-            <td><small>${escapeHtml(s.batch_names || '—')}</small></td>
-            <td><small>${escapeHtml(s.section_names || '—')}</small></td>
-            <td>${s.exams_assigned ?? 0}</td>
-            <td>${s.exams_taken ?? 0}</td>
-            <td>${s.missing_overdue > 0 ? `<span class="text-danger fw-bold">${s.missing_overdue}</span>` : '0'}</td>
-            <td><strong>${s.avg_percentage ?? 0}%</strong></td>
-            <td>${s.pass_rate ?? 0}%</td>
-            <td><small>${escapeHtml(s.best_subject || '—')}</small></td>
-            <td><small>${escapeHtml(s.weakest_subject || '—')}</small></td>
-            <td>${statusBadge(s.status)}</td>
-            <td><button class="btn btn-sm btn-outline-primary" onclick="viewStudentDetail(${s.User_ID})">View</button></td>
-        </tr>
-    `).join('');
+    tbody.innerHTML = rows.map(renderTraineeRankingsRow).join('');
 }
 
 async function loadSubjectSummary(silent = false) {
@@ -537,61 +657,111 @@ async function loadSubjectSummary(silent = false) {
         return;
     }
 
+    renderSubjectSummaryTable();
+}
+
+function getSubjectAverageScore(row) {
+    const value = parseFloat(row.avg_grade ?? row.avg_percentage ?? 0);
+    return Number.isNaN(value) ? 0 : value;
+}
+
+function sortSubjectSummaryData(data, sortOrder = 'top_to_lowest') {
+    const sorted = [...data];
+    if (sortOrder === 'lowest_to_top') {
+        sorted.sort((a, b) => getSubjectAverageScore(a) - getSubjectAverageScore(b));
+    } else {
+        sorted.sort((a, b) => getSubjectAverageScore(b) - getSubjectAverageScore(a));
+    }
+    return sorted;
+}
+
+function renderSubjectSummaryTable() {
     const tbody = document.getElementById('subjectSummaryBody');
     const empty = document.getElementById('subjectSummaryEmpty');
+    const sortOrder = document.getElementById('subjectSortFilter')?.value || 'top_to_lowest';
+    const rows = sortSubjectSummaryData(subjectSummaryData, sortOrder);
 
-    if (!subjectSummaryData.length) {
+    if (!rows.length) {
         tbody.innerHTML = '';
         empty.style.display = 'block';
         return;
     }
     empty.style.display = 'none';
-    tbody.innerHTML = subjectSummaryData.map(s => `
-        <tr>
+    tbody.innerHTML = rows.map(s => `
+        <tr class="reports-clickable-row" data-subject-id="${s.Subject_ID}">
             <td><strong>${escapeHtml(s.Subject_Name)}</strong></td>
             <td>${escapeHtml(s.Course_Name)}</td>
             <td>${s.exams}</td>
-            <td>${s.students}</td>
-            <td>${s.avg_percentage}%</td>
+            <td>${formatAvgScoreCell(s)}</td>
             <td>${s.pass_rate}%</td>
-            <td><small>${s.lowest}% – ${s.highest}%</small></td>
-            <td><button class="btn btn-sm btn-outline-primary" onclick="viewSubjectDetail(${s.Subject_ID})">View</button></td>
         </tr>
     `).join('');
 }
 
-async function viewStudentDetail(userId) {
-    const body = document.getElementById('studentDetailBody');
+async function viewTraineeDetail(userId) {
+    const body = document.getElementById('traineeDetailBody');
     body.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary"></div></div>';
-    studentDetailModal.show();
+    traineeDetailModal.show();
 
     try {
         const res = await axios.get(`${REPORTS_API}?action=student_detail&user_id=${userId}&${getFilterParams()}`);
         const data = res.data.data;
-        document.getElementById('studentDetailTitle').textContent = data.student.Fullname;
-        document.getElementById('studentDetailSub').innerHTML =
-            `${data.summary.exams_assigned ?? 0} assigned • ${data.summary.exams_taken} taken • ${data.summary.missing_overdue ?? 0} overdue missing • ${data.summary.avg_percentage}% avg • ${data.summary.pass_rate}% pass rate • ${statusBadge(data.summary.status)}`;
+        document.getElementById('traineeDetailTitle').textContent = data.trainee?.Fullname ?? data.student?.Fullname ?? 'Trainee Detail';
 
-        const attemptsHtml = (data.attempts || []).map(a => `
+        const attemptsHtml = (data.attempts || []).map(a => {
+            const inProgress = !!a.is_in_progress || a.status === 'In progress';
+            const attemptLabel = inProgress
+                ? '<div class="small text-muted">In progress</div>'
+                : (a.attempt_number ? `<div class="small text-muted">Attempt ${a.attempt_number} Score: ${escapeHtml(String(a.score_display ?? a.Score ?? '—'))} Average: ${formatScore(a.grade_percent)}%</div>` : '');
+            return `
             <tr>
-                <td>${escapeHtml(a.exam_title)}</td>
+                <td>${escapeHtml(a.exam_title)}${attemptLabel}</td>
                 <td>${escapeHtml(a.Subject_Name)}</td>
                 <td>${formatDate(a.Submission_Date)}</td>
-                <td>${a.Percentage}% <small class="text-muted">/ ${a.Passing_Score}%</small></td>
-                <td><span class="${a.status === 'Passed' ? 'text-success' : 'text-danger'}">${a.status}</span></td>
-                <td>
-                    <a href="${reportsLink(`exam-responses.php?exam_id=${a.Exam_ID}`)}" class="btn btn-sm btn-link p-0">Responses</a>
-                </td>
+                <td>${inProgress ? '<span class="text-muted">—</span>' : formatAttemptScoreCell(a)}</td>
+                <td>${inProgress ? '<span class="text-muted">In progress</span>' : `<span class="${a.status === 'Passed' ? 'text-success' : 'text-danger'}">${escapeHtml(a.status)}</span>`}</td>
             </tr>
-        `).join('');
+        `;
+        }).join('');
+
+        const atRiskSubjects = data.at_risk_subjects || [];
+        const atRiskSubjectsHtml = atRiskSubjects.length
+            ? `
+                <div class="table-responsive mb-4">
+                    <table class="table table-sm align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Subject</th>
+                                <th>Average</th>
+                                <th>Pass Rate</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${atRiskSubjects.map(subject => `
+                                <tr>
+                                    <td><strong>${escapeHtml(subject.Subject_Name)}</strong></td>
+                                    <td><strong>${formatGrade(subject.avg_percentage)}%</strong></td>
+                                    <td>${formatGrade(subject.pass_rate ?? 0)}%</td>
+                                    <td>${statusBadge(subject.status)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `
+            : '<p class="text-muted mb-4">No at-risk subjects — all completed subjects are on track.</p>';
 
         body.innerHTML = `
+            <h6 class="mb-2">At Risk Subjects</h6>
+            ${atRiskSubjectsHtml}
+            <h6 class="mb-2">Exam History</h6>
             <div class="table-responsive">
                 <table class="table table-sm">
                     <thead class="table-light">
-                        <tr><th>Exam</th><th>Subject</th><th>Date</th><th>Score</th><th>Status</th><th></th></tr>
+                        <tr><th>Exam</th><th>Subject</th><th>Date</th><th>Score</th><th>Status</th></tr>
                     </thead>
-                    <tbody>${attemptsHtml || '<tr><td colspan="6" class="text-muted">No attempts</td></tr>'}</tbody>
+                    <tbody>${attemptsHtml || '<tr><td colspan="5" class="text-muted">No attempts</td></tr>'}</tbody>
                 </table>
             </div>
         `;
@@ -614,11 +784,11 @@ async function viewSubjectDetail(subjectId) {
         const examsHtml = (data.exams || []).map(e => `
             <tr>
                 <td>${escapeHtml(e.exam_title)}</td>
-                <td>${e.students}</td>
-                <td>${e.attempts}</td>
-                <td>${e.avg_percentage}%</td>
-                <td>${e.pass_rate}% <small class="text-muted">/ ${e.Passing_Score ?? '—'}%</small></td>
-                <td><a href="${reportsLink(`exam-responses.php?exam_id=${e.Exam_ID}`)}" class="btn btn-sm btn-add-user">View responses</a></td>
+                <td>${escapeHtml(e.batch_names || '—')}</td>
+                <td>${escapeHtml(e.section_names || '—')}</td>
+                <td>${formatAvgScoreCell(e)}</td>
+                <td>${e.pass_rate}%</td>
+                <td><a href="${reportsResponsesLink(e.Exam_ID)}" class="btn btn-sm btn-add-user">View responses</a></td>
             </tr>
         `).join('');
 
@@ -626,7 +796,14 @@ async function viewSubjectDetail(subjectId) {
             <div class="table-responsive">
                 <table class="table table-sm">
                     <thead class="table-light">
-                        <tr><th>Exam</th><th>Students</th><th>Due assigned</th><th>Avg %</th><th>Pass Rate</th><th></th></tr>
+                        <tr>
+                            <th>Exam</th>
+                            <th>Batch</th>
+                            <th>Section</th>
+                            <th>Avg score</th>
+                            <th>Pass Rate</th>
+                            <th></th>
+                        </tr>
                     </thead>
                     <tbody>${examsHtml || '<tr><td colspan="6" class="text-muted">No exams</td></tr>'}</tbody>
                 </table>
@@ -638,53 +815,52 @@ async function viewSubjectDetail(subjectId) {
 }
 
 function exportReport() {
+    if (currentTab === 'overview') {
+        return;
+    }
+
     let headers, rows, filename, reportType;
 
-    if (currentTab === 'students') {
-        headers = ['Name', 'Academic Number', 'Batch', 'Section', 'Assigned', 'Taken', 'Missing Overdue', 'Avg %', 'Pass Rate', 'Best Subject', 'Weakest Subject', 'Status'];
-        rows = studentSummaryData.map(s => [
-            s.Fullname, s.Academic_Number, s.batch_names, s.section_names,
-            s.exams_assigned, s.exams_taken, s.missing_overdue,
-            s.avg_percentage, s.pass_rate, s.best_subject, s.weakest_subject, s.status
+    if (currentTab === 'trainees') {
+        headers = ['Standing', 'Rank', 'Name', 'Badge Number', 'Assigned', 'Taken', 'Missing Overdue', 'Average Grade %', 'Pass Rate', 'Status'];
+        rows = traineeSummaryData.map(s => [
+            s.standing,
+            s.Personnel_Rank || '',
+            s.Fullname,
+            s.Badge_Number,
+            s.exams_assigned,
+            s.exams_taken,
+            s.missing_overdue,
+            s.avg_grade ?? s.avg_percentage,
+            s.pass_rate,
+            s.status
         ]);
-        filename = 'student-performance.csv';
-        reportType = 'student-performance';
+        filename = buildExportFilename('trainee-rankings');
+        reportType = 'trainee-rankings';
     } else if (currentTab === 'subjects') {
-        headers = ['Subject', 'Course', 'Exams', 'Students', 'Avg %', 'Pass Rate', 'Lowest', 'Highest'];
-        rows = subjectSummaryData.map(s => [
-            s.Subject_Name, s.Course_Name, s.exams, s.students,
-            s.avg_percentage, s.pass_rate, s.lowest, s.highest
+        headers = ['Subject', 'Course', 'Exams', 'Avg Grade %', 'Pass Rate'];
+        const sortOrder = document.getElementById('subjectSortFilter')?.value || 'top_to_lowest';
+        rows = sortSubjectSummaryData(subjectSummaryData, sortOrder).map(s => [
+            s.Subject_Name, s.Course_Name, s.exams,
+            s.avg_grade ?? s.avg_percentage, s.pass_rate
         ]);
-        filename = 'subject-performance.csv';
+        filename = buildExportFilename('subject-performance');
         reportType = 'subject-performance';
     } else {
         headers = ['Metric', 'Value'];
         rows = [
-            ['Students Assigned', overviewMetrics.active_examinees ?? ''],
+            ['Trainees Assigned', overviewMetrics.active_examinees ?? ''],
             ['Exams (non-draft)', overviewMetrics.exams_administered ?? ''],
-            ['Students with Finished Attempts', overviewMetrics.students_with_results ?? ''],
+            ['Trainees with Finished Attempts', overviewMetrics.students_with_results ?? ''],
             ['Exams with Finished Attempts', overviewMetrics.exams_with_results ?? ''],
             ['Finished Attempts', overviewMetrics.finished_submissions ?? ''],
             ['Overall Pass Rate (%)', overviewMetrics.pass_rate ?? ''],
-            ['Average Score (%)', overviewMetrics.avg_score ?? ''],
+            ['Average Grade (%)', overviewMetrics.avg_grade ?? overviewMetrics.avg_score ?? ''],
             ['At-Risk Count', overviewMetrics.at_risk_count ?? ''],
             ['At-Risk (%)', overviewMetrics.at_risk_percent ?? '']
         ];
-        filename = 'reports-overview.csv';
+        filename = buildExportFilename('reports-overview');
         reportType = 'overview';
-
-        if (atRiskData.length) {
-            rows.push(['', '']);
-            rows.push(['--- At-Risk Students (preview) ---', '']);
-            rows.push(['Name', 'Academic Number', 'Assigned', 'Taken', 'Missing Overdue', 'Avg %', 'Pass Rate']);
-            atRiskData.forEach(r => {
-                rows.push([
-                    r.Fullname, r.Academic_Number,
-                    r.exams_assigned, r.exams_taken, r.missing_overdue,
-                    r.avg_percentage, r.pass_rate
-                ]);
-            });
-        }
     }
 
     if (!rows.length) {
@@ -711,14 +887,27 @@ function downloadCsv(headers, rows, filename) {
     URL.revokeObjectURL(url);
 }
 
+function formatLocalDate(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+function buildExportFilename(base) {
+    return `${base}-${formatLocalDate(new Date())}.csv`;
+}
+
 function buildFilterNoteRow() {
     const parts = [];
     const course = selectedOptionText('filterCourse');
     const batch = selectedOptionText('filterBatch');
     const section = selectedOptionText('filterSection');
+    const subject = selectedOptionText('filterSubject');
     if (course) parts.push(`Course: ${course}`);
     if (batch) parts.push(`Batch: ${batch}`);
     if (section) parts.push(`Section: ${section}`);
+    if (subject) parts.push(`Subject: ${subject}`);
     return parts.length ? `"Filters: ${parts.join(' | ').replace(/"/g, '""')}"` : '';
 }
 
@@ -729,12 +918,12 @@ function csvCell(v) {
 function statusBadge(status) {
     const map = {
         'On track': 'bg-success',
-        'Needs review': 'bg-warning text-dark',
         'At risk': 'bg-danger',
         'No data': 'bg-secondary'
     };
+    const label = status === 'On track' ? 'On Track' : (status === 'At risk' ? 'At Risk' : status);
     const cls = map[status] || 'bg-secondary';
-    return `<span class="badge ${cls}">${escapeHtml(status)}</span>`;
+    return `<span class="badge ${cls}">${escapeHtml(label)}</span>`;
 }
 
 function truncateLabel(text, maxLen = 24) {
@@ -753,5 +942,26 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-window.viewStudentDetail = viewStudentDetail;
+function formatScore(value) {
+    const num = parseFloat(value);
+    if (Number.isNaN(num)) return '—';
+    return Number.isInteger(num) ? String(num) : num.toFixed(1);
+}
+
+function formatGrade(value) {
+    return formatScore(value);
+}
+
+function formatAvgScoreCell(row) {
+    const grade = row.avg_grade ?? row.grade_percent ?? row.avg_percentage ?? row.raw_percent ?? row.Percentage;
+    return `<strong>${formatGrade(grade ?? 0)}%</strong>`;
+}
+
+function formatAttemptScoreCell(row) {
+    const grade = row.grade_percent;
+    const scoreDisplay = row.score_display ?? row.Score;
+    return `<strong>${escapeHtml(String(scoreDisplay))}</strong><br><small class="text-muted">${formatGrade(grade)}% grade</small>`;
+}
+
+window.viewTraineeDetail = viewTraineeDetail;
 window.viewSubjectDetail = viewSubjectDetail;

@@ -1,0 +1,6 @@
+/* Preserve line breaks in stored question text (code blocks, multiline stems) */
+.question-stem,
+.question-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+}

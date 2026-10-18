@@ -19,6 +19,23 @@ $rawInput = file_get_contents('php://input');
 $input = json_decode($rawInput, true) ?? [];
 $action = $_GET['action'] ?? $_POST['action'] ?? ($input['action'] ?? '');
 
+function resolveNewSectionCapacity($rawCapacity): int
+{
+    if ($rawCapacity === null || $rawCapacity === '') {
+        return 50;
+    }
+
+    $isWholeNumber = is_int($rawCapacity) || (is_string($rawCapacity) && preg_match('/^\d+$/', $rawCapacity) === 1);
+    $capacity = $isWholeNumber ? (int)$rawCapacity : 0;
+    if (!$isWholeNumber || $capacity < 45 || $capacity > 50) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Section capacity must be between 45 and 50']);
+        exit;
+    }
+
+    return $capacity;
+}
+
 try {
     // Get sections by course (through batches)
     if ($request_method === 'GET' && $action === 'list') {
@@ -46,24 +63,69 @@ try {
         exit;
     }
 
+    // Allowed section names and names already used in one batch, including archived sections.
+    if ($request_method === 'GET' && $action === 'name_options') {
+        $batch_id = (int)($_GET['batch_id'] ?? 0);
+        if ($batch_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Batch ID is required']);
+            exit;
+        }
+
+        $batchCheck = $pdo->prepare('
+            SELECT b.Batch_ID
+            FROM tbl_batch b
+            WHERE b.Batch_ID = ?
+              AND (
+                  b.Section_ID IS NULL
+                  OR b.Section_ID = 0
+                  OR EXISTS (
+                      SELECT 1
+                      FROM tbl_academic_section s
+                      WHERE s.Batch_ID = b.Batch_ID
+                  )
+              )
+        ');
+        $batchCheck->execute([$batch_id]);
+        if (!$batchCheck->fetch(PDO::FETCH_ASSOC)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Invalid batch ID. Use a course batch, not a section enrollment batch.']);
+            exit;
+        }
+
+        $usedStmt = $pdo->prepare('SELECT Section_Name FROM tbl_academic_section WHERE Batch_ID = ? ORDER BY Section_Name');
+        $usedStmt->execute([$batch_id]);
+        $usedNames = array_map('strval', $usedStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'allowed_names' => predefinedSectionNames(),
+            'used_names' => array_values($usedNames),
+        ]);
+        exit;
+    }
+
     // Add section (under batch or legacy course)
     if ($request_method === 'POST' && $action === 'add') {
         $batch_id = $input['batch_id'] ?? $_POST['batch_id'] ?? '';
         $course_id = $input['course_id'] ?? $_POST['course_id'] ?? '';
-        $section_name = $input['section_name'] ?? $_POST['section_name'] ?? '';
-        $capacity = $input['capacity'] ?? $_POST['capacity'] ?? 40;
+        $section_name = trim((string)($input['section_name'] ?? $_POST['section_name'] ?? ''));
+        $capacity = resolveNewSectionCapacity($input['capacity'] ?? $_POST['capacity'] ?? null);
 
-        if (empty($section_name)) {
+        if ($section_name === '') {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Section name is required']);
             exit;
         }
 
-        if ((int)$capacity < 1) {
+        $canonicalName = canonicalPredefinedSectionName($section_name);
+        if ($canonicalName === null) {
             http_response_code(400);
-            echo json_encode(['success' => false, 'message' => 'Capacity must be at least 1']);
+            echo json_encode(['success' => false, 'message' => 'Select a section name from the list']);
             exit;
         }
+        $section_name = $canonicalName;
 
         // New hierarchy: section under parent batch
         if (!empty($batch_id)) {
@@ -185,52 +247,40 @@ try {
     // Update section
     if ($request_method === 'POST' && $action === 'update') {
         $section_id = $input['section_id'] ?? $_POST['section_id'] ?? '';
-        $section_name = $input['section_name'] ?? $_POST['section_name'] ?? '';
-        $capacity = $input['capacity'] ?? $_POST['capacity'] ?? 40;
+        $section_name = trim((string)($input['section_name'] ?? $_POST['section_name'] ?? ''));
 
-        if (empty($section_id) || empty($section_name)) {
+        if (empty($section_id) || $section_name === '') {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => 'Section ID and name are required']);
             exit;
         }
 
-        $assignedCount = 0;
-        try {
-            $tableCheck = $pdo->query("SHOW TABLES LIKE 'tbl_user_batch'");
-            if ($tableCheck && $tableCheck->rowCount() > 0) {
-                $assignedStmt = $pdo->prepare('
-                    SELECT COUNT(DISTINCT ub.User_ID) as assigned_count
-                    FROM tbl_user_batch ub
-                    INNER JOIN tbl_batch b ON ub.Batch_ID = b.Batch_ID
-                    WHERE b.Section_ID = ?
-                ');
-                $assignedStmt->execute([$section_id]);
-                $assignedCount = (int)($assignedStmt->fetch(PDO::FETCH_ASSOC)['assigned_count'] ?? 0);
-            }
-        } catch (Exception $e) {
-            $assignedCount = 0;
-        }
-
-        if ((int)$capacity < $assignedCount) {
-            http_response_code(409);
-            echo json_encode([
-                'success' => false,
-                'message' => "Cannot reduce capacity below currently assigned trainees. Currently Assigned: {$assignedCount}, Requested Capacity: {$capacity}."
-            ]);
+        $currentStmt = $pdo->prepare('SELECT Section_ID, Batch_ID, Section_Name FROM tbl_academic_section WHERE Section_ID = ? LIMIT 1');
+        $currentStmt->execute([(int)$section_id]);
+        $current = $currentStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$current) {
+            http_response_code(404);
+            echo json_encode(['success' => false, 'message' => 'Section not found']);
             exit;
         }
 
-        $parentBatchStmt = $pdo->prepare('SELECT Batch_ID FROM tbl_academic_section WHERE Section_ID = ?');
-        $parentBatchStmt->execute([$section_id]);
-        $parentBatchId = (int)$parentBatchStmt->fetchColumn();
+        $resolvedName = resolveSectionNameForSave($section_name, (string)$current['Section_Name']);
+        if ($resolvedName === null) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Select a section name from the list']);
+            exit;
+        }
+        $section_name = $resolvedName;
+
+        $parentBatchId = (int)$current['Batch_ID'];
         if ($parentBatchId > 0 && sectionNameExistsInBatch($pdo, $parentBatchId, $section_name, (int)$section_id)) {
             http_response_code(409);
             echo json_encode(['success' => false, 'message' => 'A section with this name already exists in this batch']);
             exit;
         }
 
-        $stmt = $pdo->prepare('UPDATE tbl_academic_section SET Section_Name = ?, Capacity = ? WHERE Section_ID = ?');
-        $stmt->execute([$section_name, $capacity, $section_id]);
+        $stmt = $pdo->prepare('UPDATE tbl_academic_section SET Section_Name = ? WHERE Section_ID = ?');
+        $stmt->execute([$section_name, $section_id]);
 
         http_response_code(200);
         echo json_encode(['success' => true, 'message' => 'Section updated successfully']);
@@ -251,7 +301,7 @@ try {
             http_response_code(409);
             echo json_encode([
                 'success' => false,
-                'message' => "Cannot archive section while {$enrolledCount} trainee(s) are still enrolled. Remove assignments first.",
+                'message' => "Cannot archive section while {$enrolledCount} trainee(s) are still assigned. Remove assignments first.",
             ]);
             exit;
         }
@@ -321,7 +371,8 @@ try {
     echo json_encode(['success' => false, 'message' => 'Invalid action']);
 
 } catch (Exception $e) {
+    error_log('sections.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }
 ?>

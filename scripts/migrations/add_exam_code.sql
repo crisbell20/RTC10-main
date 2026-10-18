@@ -15,5 +15,7 @@ CREATE TABLE IF NOT EXISTS `tbl_exam_code_attempt` (
   `Success` tinyint(1) NOT NULL DEFAULT 0,
   `Attempted_At` datetime NOT NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`Attempt_ID`),
-  KEY `idx_attempt_lookup` (`Exam_ID`,`User_ID`,`Attempted_At`)
+  KEY `idx_attempt_lookup` (`Exam_ID`,`User_ID`,`Attempted_At`),
+  CONSTRAINT `fk_code_attempt_exam` FOREIGN KEY (`Exam_ID`) REFERENCES `tbl_exam` (`Exam_ID`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_code_attempt_user` FOREIGN KEY (`User_ID`) REFERENCES `tbl_user` (`User_ID`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

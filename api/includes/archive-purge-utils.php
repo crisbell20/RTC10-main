@@ -1,7 +1,6 @@
 <?php
-/**
- * Automatic purge of archived records past retention period.
- */
+
+// Automatic purge of archived records past retention period.
 
 require_once __DIR__ . '/archive-utils.php';
 require_once __DIR__ . '/audit-log-utils.php';
@@ -11,23 +10,14 @@ require_once __DIR__ . '/audit-log-utils.php';
  */
 function purgeAllArchivedRecords(PDO $pdo, int $retentionDays = ARCHIVE_RETENTION_DAYS): array
 {
-    $results = [
-        'exams' => 0,
-        'courses' => 0,
-        'batches' => 0,
-        'sections' => 0,
-        'questions' => 0,
-        'users' => 0,
+    return [
+        'exams' => purgeArchivedExams($pdo, $retentionDays),
+        'questions' => purgeArchivedQuestions($pdo, $retentionDays),
+        'users' => purgeArchivedUsers($pdo, $retentionDays),
+        'sections' => purgeArchivedSections($pdo, $retentionDays),
+        'batches' => purgeArchivedBatches($pdo, $retentionDays),
+        'courses' => purgeArchivedCourses($pdo, $retentionDays),
     ];
-
-    $results['questions'] = purgeArchivedQuestions($pdo, $retentionDays);
-    $results['sections'] = purgeArchivedSections($pdo, $retentionDays);
-    $results['batches'] = purgeArchivedBatches($pdo, $retentionDays);
-    $results['courses'] = purgeArchivedCourses($pdo, $retentionDays);
-    $results['exams'] = purgeArchivedExams($pdo, $retentionDays);
-    $results['users'] = purgeArchivedUsers($pdo, $retentionDays);
-
-    return $results;
 }
 
 function purgeArchivedExams(PDO $pdo, int $retentionDays): int
@@ -42,9 +32,6 @@ function purgeArchivedExams(PDO $pdo, int $retentionDays): int
         WHERE e.Is_Archived = 1
           AND e.Archived_At IS NOT NULL
           AND e.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-          AND NOT EXISTS (
-              SELECT 1 FROM tbl_exam_session es WHERE es.Exam_ID = e.Exam_ID
-          )
     ');
     $findStmt->execute([$retentionDays]);
     $examIds = array_map('intval', $findStmt->fetchAll(PDO::FETCH_COLUMN));
@@ -80,9 +67,6 @@ function purgeArchivedQuestions(PDO $pdo, int $retentionDays): int
         WHERE qb.Is_Archived = 1
           AND qb.Archived_At IS NOT NULL
           AND qb.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-          AND NOT EXISTS (
-              SELECT 1 FROM tbl_exam_question eq WHERE eq.Question_ID = qb.Question_ID
-          )
     ');
     $findStmt->execute([$retentionDays]);
     $questionIds = array_map('intval', $findStmt->fetchAll(PDO::FETCH_COLUMN));
@@ -118,11 +102,6 @@ function purgeArchivedSections(PDO $pdo, int $retentionDays): int
         WHERE sec.Is_Archived = 1
           AND sec.Archived_At IS NOT NULL
           AND sec.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-          AND NOT EXISTS (
-              SELECT 1 FROM tbl_user_batch ub
-              INNER JOIN tbl_batch eb ON ub.Batch_ID = eb.Batch_ID
-              WHERE eb.Section_ID = sec.Section_ID
-          )
     ');
     $findStmt->execute([$retentionDays]);
     $sectionIds = array_map('intval', $findStmt->fetchAll(PDO::FETCH_COLUMN));
@@ -157,14 +136,6 @@ function purgeArchivedBatches(PDO $pdo, int $retentionDays): int
           AND b.Archived_At IS NOT NULL
           AND b.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
           AND (b.Section_ID IS NULL OR b.Section_ID = 0)
-          AND NOT EXISTS (
-              SELECT 1 FROM tbl_academic_section sec
-              WHERE sec.Batch_ID = b.Batch_ID
-                AND (sec.Is_Archived = 0 OR sec.Is_Archived IS NULL)
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM tbl_user_batch ub WHERE ub.Batch_ID = b.Batch_ID
-          )
     ');
     $findStmt->execute([$retentionDays]);
     $batchIds = array_map('intval', $findStmt->fetchAll(PDO::FETCH_COLUMN));
@@ -192,16 +163,6 @@ function purgeArchivedCourses(PDO $pdo, int $retentionDays): int
         WHERE c.Is_Archived = 1
           AND c.Archived_At IS NOT NULL
           AND c.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-          AND NOT EXISTS (
-              SELECT 1 FROM tbl_batch b
-              WHERE b.Course_ID = c.Course_ID
-                AND (b.Is_Archived = 0 OR b.Is_Archived IS NULL)
-          )
-          AND NOT EXISTS (
-              SELECT 1 FROM tbl_exam e
-              INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
-              WHERE s.Course_ID = c.Course_ID
-          )
     ');
     $findStmt->execute([$retentionDays]);
     $courseIds = array_map('intval', $findStmt->fetchAll(PDO::FETCH_COLUMN));
@@ -285,9 +246,6 @@ function purgeArchivedUsers(PDO $pdo, int $retentionDays): int
         WHERE u.Is_Archived = 1
           AND u.Archived_At IS NOT NULL
           AND u.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-          AND NOT EXISTS (
-              SELECT 1 FROM tbl_exam_session es WHERE es.User_ID = u.User_ID
-          )
     ');
     $findStmt->execute([$retentionDays]);
     $userIds = array_map('intval', $findStmt->fetchAll(PDO::FETCH_COLUMN));
@@ -298,10 +256,18 @@ function purgeArchivedUsers(PDO $pdo, int $retentionDays): int
 
     $deleted = 0;
     foreach ($userIds as $userId) {
-        $stmt = $pdo->prepare('DELETE FROM tbl_user WHERE User_ID = ? AND Is_Archived = 1');
-        $stmt->execute([$userId]);
-        if ($stmt->rowCount() > 0) {
-            $deleted++;
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('DELETE FROM tbl_exam_session WHERE User_ID = ?')->execute([$userId]);
+            $stmt = $pdo->prepare('DELETE FROM tbl_user WHERE User_ID = ? AND Is_Archived = 1');
+            $stmt->execute([$userId]);
+            if ($stmt->rowCount() > 0) {
+                $deleted++;
+            }
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            throw $e;
         }
     }
 
@@ -329,7 +295,6 @@ function countEligibleForPurgeAll(PDO $pdo, int $retentionDays = ARCHIVE_RETENTI
             WHERE e.Is_Archived = 1
               AND e.Archived_At IS NOT NULL
               AND e.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-              AND NOT EXISTS (SELECT 1 FROM tbl_exam_session es WHERE es.Exam_ID = e.Exam_ID)
         ');
         $stmt->execute([$retentionDays]);
         $counts['exams'] = (int)$stmt->fetchColumn();
@@ -341,7 +306,6 @@ function countEligibleForPurgeAll(PDO $pdo, int $retentionDays = ARCHIVE_RETENTI
             WHERE qb.Is_Archived = 1
               AND qb.Archived_At IS NOT NULL
               AND qb.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-              AND NOT EXISTS (SELECT 1 FROM tbl_exam_question eq WHERE eq.Question_ID = qb.Question_ID)
         ');
         $stmt->execute([$retentionDays]);
         $counts['questions'] = (int)$stmt->fetchColumn();
@@ -353,11 +317,6 @@ function countEligibleForPurgeAll(PDO $pdo, int $retentionDays = ARCHIVE_RETENTI
             WHERE sec.Is_Archived = 1
               AND sec.Archived_At IS NOT NULL
               AND sec.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-              AND NOT EXISTS (
-                  SELECT 1 FROM tbl_user_batch ub
-                  INNER JOIN tbl_batch eb ON ub.Batch_ID = eb.Batch_ID
-                  WHERE eb.Section_ID = sec.Section_ID
-              )
         ');
         $stmt->execute([$retentionDays]);
         $counts['sections'] = (int)$stmt->fetchColumn();
@@ -370,14 +329,6 @@ function countEligibleForPurgeAll(PDO $pdo, int $retentionDays = ARCHIVE_RETENTI
               AND b.Archived_At IS NOT NULL
               AND b.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
               AND (b.Section_ID IS NULL OR b.Section_ID = 0)
-              AND NOT EXISTS (
-                  SELECT 1 FROM tbl_academic_section sec
-                  WHERE sec.Batch_ID = b.Batch_ID
-                    AND (sec.Is_Archived = 0 OR sec.Is_Archived IS NULL)
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM tbl_user_batch ub WHERE ub.Batch_ID = b.Batch_ID
-              )
         ');
         $stmt->execute([$retentionDays]);
         $counts['batches'] = (int)$stmt->fetchColumn();
@@ -389,15 +340,6 @@ function countEligibleForPurgeAll(PDO $pdo, int $retentionDays = ARCHIVE_RETENTI
             WHERE c.Is_Archived = 1
               AND c.Archived_At IS NOT NULL
               AND c.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-              AND NOT EXISTS (
-                  SELECT 1 FROM tbl_batch b
-                  WHERE b.Course_ID = c.Course_ID AND (b.Is_Archived = 0 OR b.Is_Archived IS NULL)
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM tbl_exam e
-                  INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
-                  WHERE s.Course_ID = c.Course_ID
-              )
         ');
         $stmt->execute([$retentionDays]);
         $counts['courses'] = (int)$stmt->fetchColumn();
@@ -409,7 +351,6 @@ function countEligibleForPurgeAll(PDO $pdo, int $retentionDays = ARCHIVE_RETENTI
             WHERE u.Is_Archived = 1
               AND u.Archived_At IS NOT NULL
               AND u.Archived_At < DATE_SUB(NOW(), INTERVAL ? DAY)
-              AND NOT EXISTS (SELECT 1 FROM tbl_exam_session es WHERE es.User_ID = u.User_ID)
         ');
         $stmt->execute([$retentionDays]);
         $counts['users'] = (int)$stmt->fetchColumn();

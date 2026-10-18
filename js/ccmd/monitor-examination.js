@@ -1,6 +1,4 @@
-/**
- * CCMD Live Exam Monitoring (no incident management — Admin resolves incidents)
- */
+// CCMD Live Exam Monitoring
 
 const MONITOR_API = '../../api/ccmd/monitor.php';
 const MONITOR_REFRESH_MS = 1000;
@@ -220,7 +218,7 @@ async function loadSessions() {
     } catch (err) {
         console.error('Sessions load error:', err);
         document.getElementById('sessionsTableBody').innerHTML =
-            '<tr><td colspan="5" class="text-center text-danger py-4">Failed to load sessions</td></tr>';
+            '<tr><td colspan="6" class="text-center text-danger py-4">Failed to load sessions</td></tr>';
     }
 }
 
@@ -228,7 +226,7 @@ function renderSessions(rows, pagination) {
     const tbody = document.getElementById('sessionsTableBody');
 
     if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No trainees match this filter</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted py-4">No trainees match this filter</td></tr>';
     } else {
         tbody.innerHTML = rows.map(row => {
             const statusClass = row.status === 'in_progress' ? 'in-progress'
@@ -257,9 +255,10 @@ function renderSessions(rows, pagination) {
                 <tr>
                     <td>
                         <strong>${escapeHtml(row.Fullname)}</strong>
-                        <div class="small text-muted">${escapeHtml(row.Academic_Number || '')}</div>
+                        <div class="small text-muted">${escapeHtml(row.Badge_Number || '')}</div>
                     </td>
                     <td>${escapeHtml(row.batch_names || '—')}</td>
+                    <td>${escapeHtml(row.section_names || '—')}</td>
                     <td><span class="status-pill ${statusClass}">${statusLabel}</span></td>
                     <td>
                         <div class="d-flex align-items-center gap-2">

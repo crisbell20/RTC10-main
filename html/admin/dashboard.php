@@ -20,40 +20,22 @@ $userName = $_SESSION['user_name'] ?? 'User';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <?php require __DIR__ . '/../includes/sidebar-state-early.php'; ?>
     <title>Admin Dashboard - PNP RTC X</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="../../assets/css/dashboard.css">
-    <style>
-        .sidebar-menu .menu-label {
-            display: block;
-            padding: 12px 20px;
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: #9ca3af;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 20px;
-            margin-bottom: 8px;
-            cursor: default;
-            pointer-events: none;
-        }
-        .sidebar-menu .menu-label i {
-            margin-right: 6px;
-            font-size: 0.8rem;
-            opacity: 0.6;
-        }
-    </style>
-</head>
+    <link rel="stylesheet" href="../../assets/css/dashboard.css?v=1">
+    <link rel="stylesheet" href="../../assets/css/staff-responsive.css?v=3">
+    </head>
 <body>
     <!-- Top Navigation -->
     <div class="top-nav">
-        <div class="nav-brand">
-            <h5>PNP Regional Training Center X</h5>
-            <p>Administration & System Management</p>
-        </div>
+        <?php
+        $navBrandSubtitle = 'Administration & System Management';
+        require __DIR__ . '/../includes/nav-brand.php';
+        ?>
         <div class="nav-user">
-            <span><?= $userName ?></span>
+            <span><?= htmlspecialchars($userName, ENT_QUOTES, 'UTF-8') ?></span>
             <button class="btn-logout" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
         </div>
     </div>
@@ -63,6 +45,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
         <!-- Sidebar -->
         <div class="sidebar">
             <ul class="sidebar-menu">
+                <li><a href="profile.php"><i class="bi bi-person-circle"></i>Profile</a></li>
                 <li><a href="dashboard.php" class="active"><i class="bi bi-grid-1x2-fill"></i>Dashboard</a></li>
                 <li class="menu-label"><i class="bi bi-folder-fill"></i>Masterfiles</li>
                 <li><a href="../masterfiles/users.php"><i class="bi bi-people-fill"></i>Manage Users</a></li>
@@ -71,7 +54,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                 <li><a href="../masterfiles/exams.php"><i class="bi bi-pencil-square"></i>Manage Exams</a></li>
                 <li><a href="../masterfiles/question-bank.php"><i class="bi bi-folder"></i>Question Bank</a></li>
                 <li><a href="../masterfiles/reports.php"><i class="bi bi-bar-chart"></i>Reports & Analytics</a></li>
-                <li><a href="cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
+                <li><a href="../masterfiles/cheating-incidents.php"><i class="bi bi-exclamation-triangle"></i>Cheating Incidents</a></li>
                 <li><a href="../masterfiles/archive.php"><i class="bi bi-archive"></i>Archive</a></li>
                 <li><a href="../masterfiles/audit-logs.php"><i class="bi bi-clock-history"></i>Audit Logs</a></li>
                 <li><a href="../masterfiles/settings.php"><i class="bi bi-gear"></i>System Settings</a></li>
@@ -120,43 +103,17 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     </div>
                 </div>
 
-                <div class="stat-card red">
+                <a href="../masterfiles/cheating-incidents.php" class="stat-card red text-decoration-none text-reset">
                     <div class="stat-header">
-                        <div class="stat-label">Open Incidents</div>
-                        <div class="stat-icon icon-red"><i class="bi bi-exclamation-triangle"></i></div>
+                        <div class="stat-label">Cheating Incidents</div>
+                        <div class="stat-icon icon-red"><i class="bi bi-exclamation-triangle-fill"></i></div>
                     </div>
-                    <div class="stat-value" id="openIncidents">--</div>
+                    <div class="stat-value" id="cheatingIncidents">--</div>
                     <div class="stat-footer">
-                        <a href="cheating-incidents.php" class="text-decoration-none">Review cheating incidents</a>
+                        <span id="cheatingIncidentsLabel">Across all exams</span>
                     </div>
-                </div>
+                </a>
             </div>
-
-            <!-- <div class="section-card">
-                <div class="section-header">
-                    <i class="bi bi-people-fill" style="color: var(--secondary-color); font-size: 1.3rem;"></i>
-                    <div>
-                        <h5>User Management</h5>
-                        <p>System users by role</p>
-                    </div>
-                </div>
-                <div class="section-body">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>User Name</th>
-                                <th>Email</th>
-                                <th>Role</th>
-                                <th>Status</th>
-                                <th>Date Created</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody id="userTableBody">
-                        </tbody>
-                    </table>
-                </div>
-            </div> -->
 
             <!-- System Activity Log -->
             <div class="section-card">
@@ -171,7 +128,8 @@ $userName = $_SESSION['user_name'] ?? 'User';
                     <a href="../masterfiles/audit-logs.php" class="btn btn-sm btn-outline-primary">View all</a>
                 </div>
                 <div class="section-body">
-                    <table class="table">
+                    <div class="table-responsive">
+                    <table class="table text-nowrap">
                         <thead>
                             <tr>
                                 <th>User</th>
@@ -189,6 +147,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
                             </tr>
                         </tbody>
                     </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -198,111 +157,7 @@ $userName = $_SESSION['user_name'] ?? 'User';
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/logout-handler.js?v=1"></script>
-    <script src="../../assets/js/auto-logout.js"></script>
-    <script>
-        // Load dashboard statistics
-        axios.get('../../api/admin/stats.php', { withCredentials: true })
-            .then(function (response) {
-                if (response.data.success && response.data.stats) {
-                    const stats = response.data.stats;
-                    
-                    // Update Active Users
-                    const totalUsersEl = document.getElementById('totalUsers');
-                    if (totalUsersEl) {
-                        totalUsersEl.textContent = stats.total_users || 0;
-                    }
-
-                    // Update Active Courses
-                    const activeCoursesEl = document.getElementById('activeCourses');
-                    if (activeCoursesEl) {
-                        activeCoursesEl.textContent = stats.total_courses || 0;
-                    }
-
-                    // Update Active Exams
-                    const activeExamsEl = document.getElementById('activeExams');
-                    if (activeExamsEl) {
-                        activeExamsEl.textContent = stats.active_exams ?? 0;
-                    }
-
-                    const openIncidentsEl = document.getElementById('openIncidents');
-                    if (openIncidentsEl) {
-                        openIncidentsEl.textContent = stats.open_incidents ?? 0;
-                    }
-                    
-                    // Update users by role if elements exist
-                    if (stats.by_role) {
-                        const adminCount = stats.by_role.Admin || 0;
-                        const ccmdCount = stats.by_role.CCMD || 0;
-                        const examineeCount = stats.by_role.Examinee || 0;
-                        
-                        // Update role-specific counts if elements exist
-                        const adminEl = document.getElementById('statAdmin');
-                        if (adminEl) adminEl.textContent = adminCount;
-                        
-                        const ccmdEl = document.getElementById('statCcmd');
-                        if (ccmdEl) ccmdEl.textContent = ccmdCount;
-                        
-                        const examineeEl = document.getElementById('statExaminee');
-                        if (examineeEl) examineeEl.textContent = examineeCount;
-                    }
-                }
-            })
-            .catch(function (error) {
-                console.error('Error loading dashboard stats:', error);
-                const totalUsersEl = document.getElementById('totalUsers');
-                if (totalUsersEl) {
-                    totalUsersEl.textContent = '0';
-                }
-                const activeCoursesEl = document.getElementById('activeCourses');
-                if (activeCoursesEl) {
-                    activeCoursesEl.textContent = '0';
-                }
-                const activeExamsEl = document.getElementById('activeExams');
-                if (activeExamsEl) {
-                    activeExamsEl.textContent = '0';
-                }
-                const openIncidentsEl = document.getElementById('openIncidents');
-                if (openIncidentsEl) {
-                    openIncidentsEl.textContent = '0';
-                }
-            });
-
-        axios.get('../../api/masterfiles/audit-logs.php?action=recent&limit=8', { withCredentials: true })
-            .then(function (response) {
-                const tbody = document.getElementById('recentAuditBody');
-                if (!tbody) return;
-
-                if (!response.data.success || !response.data.data.length) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No recent activity logged yet.</td></tr>';
-                    return;
-                }
-
-                tbody.innerHTML = response.data.data.map(function (row) {
-                    const statusBadge = (row.Status || 'SUCCESS') === 'FAILED'
-                        ? '<span class="badge bg-danger">Failed</span>'
-                        : '<span class="badge bg-success">Success</span>';
-                    const when = row.Timestamp ? new Date(row.Timestamp).toLocaleString() : '—';
-                    return '<tr>'
-                        + '<td><strong>' + escapeHtml(row.user_display || 'Unknown') + '</strong></td>'
-                        + '<td><small>' + escapeHtml(row.Action || '—') + '</small></td>'
-                        + '<td><span class="badge bg-light text-dark border">' + escapeHtml(row.Module || '—') + '</span></td>'
-                        + '<td><small>' + when + '</small></td>'
-                        + '<td>' + statusBadge + '</td>'
-                        + '</tr>';
-                }).join('');
-            })
-            .catch(function () {
-                const tbody = document.getElementById('recentAuditBody');
-                if (tbody) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Unable to load recent activity.</td></tr>';
-                }
-            });
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text ?? '';
-            return div.innerHTML;
-        }
-    </script>
+    <script src="../../assets/js/auto-logout.js?v=2"></script>
+    <script src="../../js/admin/dashboard.js?v=2"></script>
 </body>
 </html>

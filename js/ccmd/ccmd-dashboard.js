@@ -8,12 +8,6 @@ function loadStats() {
 
                 document.querySelector('.stat-card.blue .stat-value').textContent = data.active_exams;
                 document.querySelector('.stat-card.green .stat-value').textContent = data.active_participants;
-
-                const completedEl = document.getElementById('completedToday');
-                if (completedEl) completedEl.textContent = data.completed_today;
-
-                const publishedEl = document.getElementById('publishedExams');
-                if (publishedEl) publishedEl.textContent = data.active_exams;
             }
         })
         .catch(err => {

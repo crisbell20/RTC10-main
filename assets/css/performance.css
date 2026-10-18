@@ -9,10 +9,6 @@
     margin-bottom: 1.5rem;
 }
 
-.perf-filters {
-    min-width: 160px;
-}
-
 .perf-status-banner {
     border-radius: 10px;
     padding: 1rem 1.25rem;
@@ -49,6 +45,18 @@
 .perf-status-banner i {
     font-size: 1.5rem;
     flex-shrink: 0;
+}
+
+.perf-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    width: 100%;
+}
+
+.perf-stack .section-card {
+    width: 100%;
+    margin-bottom: 0;
 }
 
 .chart-container {
@@ -151,8 +159,13 @@
     cursor: pointer;
 }
 
-.subject-highlight-item:last-child {
+.subject-highlights-list .subject-highlight-item:last-child {
     border-bottom: none;
+}
+
+.subject-show-more-btn {
+    margin-top: 0.5rem;
+    display: block;
 }
 
 .subject-highlight-item:hover {
@@ -187,33 +200,6 @@
     letter-spacing: 0.03em;
 }
 
-.subject-chart-container {
-    height: 200px;
-    margin-bottom: 1.25rem;
-}
-
-.suggestion-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.suggestion-list li {
-    padding: 0.5rem 0;
-    padding-left: 1.25rem;
-    position: relative;
-    font-size: 0.875rem;
-    color: #374151;
-}
-
-.suggestion-list li::before {
-    content: '\2022';
-    position: absolute;
-    left: 0;
-    color: var(--secondary-color);
-    font-weight: bold;
-}
-
 .exam-attempt-row {
     border: 1px solid var(--border-color);
     border-radius: 8px;
@@ -233,10 +219,6 @@
 @media (max-width: 768px) {
     .perf-page-header {
         flex-direction: column;
-    }
-
-    .perf-filters {
-        width: 100%;
     }
 
     .chart-container {

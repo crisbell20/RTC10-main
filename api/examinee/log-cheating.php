@@ -1,13 +1,13 @@
 <?php
-/**
- * Log cheating / proctoring events during an active exam session.
- */
+
+// Logs cheating events during an exam
 
 header('Content-Type: application/json');
 session_start();
 
 require_once __DIR__ . '/../config/connection-pdo.php';
 require_once __DIR__ . '/../includes/cheating-log-utils.php';
+require_once __DIR__ . '/../includes/system-settings-utils.php';
 
 function sendSuccess($data = []) {
     http_response_code(200);
@@ -47,7 +47,8 @@ $userId = (int)$_SESSION['user_id'];
 
 try {
     $stmt = $pdo->prepare('
-        SELECT es.Session_ID, es.User_ID, es.Exam_ID, es.Time_Ended
+        SELECT es.Session_ID, es.User_ID, es.Exam_ID, es.Time_Ended,
+       es.Cheating_Locked, es.Cheating_Locked_At, es.Cheating_Unlocked_At
         FROM tbl_exam_session es
         WHERE es.Session_ID = ?
         LIMIT 1
@@ -62,6 +63,9 @@ try {
     if (!empty($session['Time_Ended'])) {
         sendError('Exam session has already ended', 400);
     }
+    if ((int)($session['Cheating_Locked'] ?? 0) === 1) {
+    sendError('Exam session is locked', 403);
+}
 
     $logStmt = $pdo->prepare('
         INSERT INTO tbl_cheating_log (Session_ID, Type, Timestamp)
@@ -72,9 +76,52 @@ try {
     $labels = cheatingEventLabels();
     $reason = $labels[$type] ?? 'Suspicious activity detected during exam';
 
-    $countStmt = $pdo->prepare('SELECT COUNT(*) AS total FROM tbl_cheating_log WHERE Session_ID = ?');
-    $countStmt->execute([$sessionId]);
-    $violationCount = (int)($countStmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+    $countStmt = $pdo->prepare('
+    SELECT COUNT(*) AS total
+    FROM tbl_cheating_log
+    WHERE Session_ID = ?
+      AND (
+          ? IS NULL
+          OR Timestamp > ?
+      )
+');
+$countStmt->execute([
+    $sessionId,
+    $session['Cheating_Unlocked_At'],
+    $session['Cheating_Unlocked_At']
+]);
+$violationCount = (int)($countStmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+
+    $settingStmt = $pdo->prepare('
+    SELECT Setting_Value
+    FROM tbl_system_setting
+    WHERE Setting_Key = ?
+    LIMIT 1
+');
+$settingStmt->execute(['cheating_attempt_limit']);
+
+$setting = $settingStmt->fetch(PDO::FETCH_ASSOC);
+
+$cheatingAttemptLimit = (int)($setting['Setting_Value'] ?? 5);
+
+if ($cheatingAttemptLimit < 1) {
+    $cheatingAttemptLimit = 5;
+}
+
+$cheatingLocked = false;
+
+if ($violationCount >= $cheatingAttemptLimit) {
+    $lockStmt = $pdo->prepare('
+        UPDATE tbl_exam_session
+        SET Cheating_Locked = 1,
+            Cheating_Locked_At = NOW()
+        WHERE Session_ID = ?
+          AND Cheating_Locked = 0
+    ');
+    $lockStmt->execute([$sessionId]);
+
+    $cheatingLocked = true;
+}
 
     $incidentId = null;
     $incidentCreated = false;
@@ -114,11 +161,13 @@ try {
     }
 
     sendSuccess([
-        'logged' => true,
-        'violation_count' => $violationCount,
-        'incident_id' => $incidentId,
-        'incident_created' => $incidentCreated,
-    ]);
+    'logged' => true,
+    'violation_count' => $violationCount,
+    'cheating_attempt_limit' => $cheatingAttemptLimit,
+    'cheating_locked' => $cheatingLocked,
+    'incident_id' => $incidentId,
+    'incident_created' => $incidentCreated,
+]);
 } catch (PDOException $e) {
     error_log('log-cheating.php DB error: ' . $e->getMessage());
     sendError('Failed to log proctoring event', 500);

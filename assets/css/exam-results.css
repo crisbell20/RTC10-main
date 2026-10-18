@@ -1,0 +1,94 @@
+/* Exam results */
+
+.result-summary {
+    background: transparent;
+    color: #1f2937;
+    padding: 2rem;
+    border-radius: 12px;
+    margin-bottom: 2rem;
+}
+.result-summary.passed {
+    background: transparent;
+    color: #1f2937;
+}
+.result-summary.failed {
+    background: transparent;
+    color: #1f2937;
+}
+.stat-card {
+    background: #ffffff;
+    padding: 1rem;
+    border-radius: 8px;
+    text-align: center;
+}
+.stat-card h3 {
+    font-size: 2rem;
+    margin: 0;
+    font-weight: bold;
+}
+.stat-card p {
+    margin: 0;
+    opacity: 0.9;
+}
+.question-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    background: white;
+}
+.question-number {
+    display: inline-block;
+    width: 32px;
+    height: 32px;
+    line-height: 32px;
+    text-align: center;
+    border-radius: 50%;
+    background: #e5e7eb;
+    font-weight: bold;
+    margin-right: 0.5rem;
+}
+.question-card.correct .question-number {
+    background: #d1fae5;
+    color: #065f46;
+}
+.question-card.incorrect .question-number {
+    background: #fee2e2;
+    color: #991b1b;
+}
+.choice-item {
+    padding: 0.75rem;
+    margin: 0.5rem 0;
+    border-radius: 6px;
+    border: 2px solid #e5e7eb;
+    background: #f9fafb;
+}
+.choice-item.user-answer {
+    border-color: #3b82f6;
+    background: #dbeafe;
+}
+.choice-item.correct-answer {
+    border-color: #10b981;
+    background: #d1fae5;
+}
+.choice-item.user-answer.incorrect {
+    border-color: #ef4444;
+    background: #fee2e2;
+}
+.badge-result {
+    font-size: 0.875rem;
+    padding: 0.5rem 1rem;
+}
+.result-card {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1rem;
+    border: 1px solid #e5e7eb;
+    transition: all 0.2s;
+    cursor: pointer;
+}
+.result-card:hover {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transform: translateY(-2px);
+}

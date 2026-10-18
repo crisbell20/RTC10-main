@@ -1,10 +1,10 @@
 <?php
-/**
- * Centralized audit logging for PNP RTC X.
- * Append-only: never update or delete via application except retention purge (Admin/cron).
- */
 
-const AUDIT_LOG_RETENTION_DAYS = 730; // 2 years — aligned with archive retention
+require_once __DIR__ . '/person-name-utils.php';
+
+// Centralized audit logging
+
+const AUDIT_LOG_RETENTION_DAYS = 730; // 2 years
 const AUDIT_LOG_RETENTION_DAYS_MIN = 30;
 const AUDIT_LOG_RETENTION_DAYS_MAX = 3650;
 
@@ -85,7 +85,7 @@ function auditLookupScalar(PDO $pdo, string $sql, array $params, string $fallbac
 
 function auditUserLabel(PDO $pdo, int $userId): string
 {
-    $fullname = auditLookupScalar($pdo, 'SELECT Fullname FROM tbl_user WHERE User_ID = ?', [$userId], '');
+    $fullname = auditLookupScalar($pdo, 'SELECT ' . personNameSql() . ' FROM tbl_user WHERE User_ID = ?', [$userId], '');
     return $fullname !== '' ? $fullname : "User #{$userId}";
 }
 
@@ -137,6 +137,87 @@ function auditSessionUsername(): string
 }
 
 /**
+ * Human-readable user label for audit log outcomes.
+ */
+function formatAuditUserLabel(array $user): string
+{
+    $name = trim((string)($user['Fullname'] ?? ''));
+    if ($name === '' && (isset($user['Firstname']) || isset($user['Lastname']) || isset($user['Middlename']))) {
+        $name = formatPersonName($user['Firstname'] ?? '', $user['Middlename'] ?? '', $user['Lastname'] ?? '');
+    }
+    $badgeNumber = trim((string)($user['Badge_Number'] ?? ''));
+    if ($badgeNumber !== '') {
+        return $name !== '' ? "{$name} ({$badgeNumber})" : $badgeNumber;
+    }
+
+    $email = trim((string)($user['Email'] ?? ''));
+    if ($name !== '') {
+        return $email !== '' ? "{$name} ({$email})" : $name;
+    }
+
+    return $email !== '' ? $email : 'Unknown user';
+}
+
+/**
+ * Details should describe the action, not repeat the actor already shown in User.
+ */
+function formatAuditDetailsForDisplay(array $row): string
+{
+    $outcome = trim((string)($row['Outcome'] ?? ''));
+    $action = strtoupper(trim((string)($row['Action'] ?? '')));
+
+    if ($action === 'CONNECTION_LOST') {
+        if (preg_match('/"([^"]+)"/', $outcome, $m)) {
+            return 'Connection lost "' . trim($m[1]) . '"';
+        }
+        return 'Connection lost';
+    }
+
+    if ($outcome === '') {
+        return '';
+    }
+
+    $name = trim((string)($row['user_name'] ?? ''));
+    $email = trim((string)($row['user_email'] ?? ''));
+    $badge = trim((string)($row['user_badge_number'] ?? ''));
+
+    $prefixes = [];
+    if ($name !== '') {
+        if ($badge !== '') {
+            $prefixes[] = $name . ' (' . $badge . ')';
+        }
+        if ($email !== '') {
+            $prefixes[] = $name . ' (' . $email . ')';
+        }
+        $prefixes[] = $name;
+    }
+    if ($badge !== '') {
+        $prefixes[] = $badge;
+    }
+    if ($email !== '') {
+        $prefixes[] = $email;
+    }
+
+    usort($prefixes, static function ($a, $b) {
+        return strlen($b) <=> strlen($a);
+    });
+
+    foreach ($prefixes as $prefix) {
+        if ($prefix === '' || strncasecmp($outcome, $prefix, strlen($prefix)) !== 0) {
+            continue;
+        }
+
+        $rest = ltrim(substr($outcome, strlen($prefix)), " \t:-");
+        if ($rest !== '') {
+            return ucfirst($rest);
+        }
+        break;
+    }
+
+    return $outcome;
+}
+
+/**
  * Write an audit log entry. Never throws to callers.
  *
  * @param array{
@@ -146,8 +227,6 @@ function auditSessionUsername(): string
  *   action: string,
  *   outcome?: string,
  *   status?: string,
- *   entity_type?: string|null,
- *   entity_id?: int|null,
  *   ip_address?: string|null
  * } $entry
  */
@@ -169,8 +248,6 @@ function writeAuditLog(PDO $pdo, array $entry): void
     if (!in_array($status, ['SUCCESS', 'FAILED'], true)) {
         $status = 'SUCCESS';
     }
-    $entityType = isset($entry['entity_type']) ? trim((string)$entry['entity_type']) : null;
-    $entityId = isset($entry['entity_id']) && $entry['entity_id'] !== null ? (int)$entry['entity_id'] : null;
     $userRole = isset($entry['user_role']) ? trim((string)$entry['user_role']) : null;
     $ipAddress = isset($entry['ip_address']) ? trim((string)$entry['ip_address']) : getClientIpAddress();
 
@@ -178,8 +255,8 @@ function writeAuditLog(PDO $pdo, array $entry): void
         if (auditLogExtendedColumnsExist($pdo)) {
             $stmt = $pdo->prepare('
                 INSERT INTO tbl_audit_log
-                    (User_ID, Action, Module, Outcome, Status, Entity_Type, Entity_ID, IP_Address, User_Role)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (User_ID, Action, Module, Outcome, Status, IP_Address, User_Role)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ');
             $stmt->execute([
                 $userId,
@@ -187,8 +264,6 @@ function writeAuditLog(PDO $pdo, array $entry): void
                 $module ?: null,
                 $outcome ?: null,
                 $status,
-                $entityType ?: null,
-                $entityId,
                 $ipAddress ?: null,
                 $userRole ?: null,
             ]);
@@ -227,8 +302,6 @@ function auditFromSession(
         'action' => $action,
         'outcome' => $outcome,
         'status' => $status,
-        'entity_type' => $entityType,
-        'entity_id' => $entityId,
     ]);
 }
 
@@ -295,6 +368,7 @@ function getAuditActionOptions(): array
         'CREATE_USER', 'UPDATE_USER', 'DELETE_USER', 'ARCHIVE_USER', 'RESTORE_USER', 'RESET_PASSWORD',
         'CREATE_EXAM', 'UPDATE_EXAM', 'DELETE_EXAM', 'ARCHIVE_EXAM', 'RESTORE_EXAM', 'CLOSE_EXAM',
         'RESET_EXAM_CODE', 'TOGGLE_RESPONSE_REVIEW', 'VIEW_EXAM_RESPONSE', 'ASSIGN_EXAM_QUESTIONS', 'ASSIGN_EXAM_BATCH',
+        'CONNECTION_LOST',
         'CREATE_QUESTION', 'UPDATE_QUESTION', 'DELETE_QUESTION', 'ARCHIVE_QUESTION', 'RESTORE_QUESTION', 'IMPORT_QUESTIONS',
         'CREATE_COURSE', 'UPDATE_COURSE', 'DELETE_COURSE', 'ARCHIVE_COURSE', 'RESTORE_COURSE',
         'CREATE_MODULE', 'UPDATE_MODULE', 'DELETE_MODULE', 'ARCHIVE_MODULE', 'RESTORE_MODULE',

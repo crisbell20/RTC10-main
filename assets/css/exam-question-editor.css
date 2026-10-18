@@ -1,4 +1,4 @@
-/* Google Forms–style exam question builder */
+/* Exam question editor */
 
 .exam-question-canvas {
     min-height: 200px;
@@ -101,6 +101,12 @@
     border-color: #cbd5e1 !important;
 }
 
+.question-bank-item-choices .exam-q-choice {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    margin: 0.15rem 0;
+}
+
 .exam-question-card-draft {
     border-color: #93c5fd;
     background: #f8fafc;
@@ -158,7 +164,6 @@
     font-size: 0.9rem;
 }
 
-/* Exams list — keep ⋮ action menus visible when the list is short */
 .exams-list-card,
 .exams-list-card .section-body,
 #examsContainer,

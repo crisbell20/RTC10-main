@@ -1,7 +1,6 @@
 <?php
-/**
- * Admin exam responses API — rankings and per-student review for a single exam.
- */
+
+// Exam responses API
 
 header('Content-Type: application/json');
 session_start();
@@ -19,6 +18,7 @@ require_once __DIR__ . '/../includes/exam-assignment-utils.php';
 require_once __DIR__ . '/../includes/exam-session-utils.php';
 require_once __DIR__ . '/../includes/exam-item-analysis-utils.php';
 require_once __DIR__ . '/../includes/exam-deadline-finalize-utils.php';
+require_once __DIR__ . '/../includes/person-name-utils.php';
 
 function sendSuccess($data = []) {
     http_response_code(200);
@@ -43,7 +43,6 @@ function fetchExamOrFail(PDO $pdo, int $examId): array {
             e.Status,
             e.Is_Archived,
             s.Subject_Name,
-            s.Subject_Code,
             c.Course_ID,
             c.Course_Name,
             (SELECT COUNT(*) FROM tbl_exam_question eq WHERE eq.Exam_ID = e.Exam_ID) AS question_count
@@ -134,27 +133,113 @@ function enrichRankingRow(array &$row, int $totalItems, int $examId, PDO $pdo): 
     $passed = $rawPercent >= $passingScore;
     $row['status'] = $passed ? 'Passed' : 'Failed';
     $row['remarks'] = $row['status'];
-    $row['time_taken'] = formatTimeTaken($row['Time_Started'] ?? null, $row['Time_Ended'] ?? null);
+    $row['time_taken'] = formatExamTimeTaken(
+        $row['Time_Started'] ?? null,
+        $row['Time_Ended'] ?? null,
+        (int)($row['answered_count'] ?? 0)
+    );
     $row['Score'] = $score;
     $row['Percentage'] = $rawPercent;
     $row['Personnel_Rank'] = trim((string)($row['Personnel_Rank'] ?? '')) ?: null;
 }
 
-function formatTimeTaken(?string $timeStarted, ?string $timeEnded): string {
-    if (!$timeStarted || !$timeEnded) {
-        return 'N/A';
+/**
+ * Validate and return batch/section filter IDs against exam assignments.
+ *
+ * @return array{0:int,1:int}
+ */
+function parseAssignmentFilterParams(array $assignments): array {
+    $batchId = (int)($_GET['batch_id'] ?? 0);
+    $sectionId = (int)($_GET['section_id'] ?? 0);
+
+    $validBatchIds = [];
+    $validSectionIds = [];
+    foreach ($assignments as $assignment) {
+        $parentBatchId = (int)($assignment['parent_batch_id'] ?? 0);
+        $batchIdFallback = (int)($assignment['batch_id'] ?? 0);
+        $resolvedBatchId = $parentBatchId > 0 ? $parentBatchId : $batchIdFallback;
+        if ($resolvedBatchId > 0) {
+            $validBatchIds[$resolvedBatchId] = true;
+        }
+
+        $assignmentSectionId = (int)($assignment['section_id'] ?? 0);
+        if ($assignmentSectionId > 0) {
+            $validSectionIds[$assignmentSectionId] = true;
+        }
     }
 
-    $diff = strtotime($timeEnded) - strtotime($timeStarted);
-    if ($diff < 0) {
-        return 'N/A';
+    if ($batchId > 0 && !isset($validBatchIds[$batchId])) {
+        $batchId = 0;
+    }
+    if ($sectionId > 0 && !isset($validSectionIds[$sectionId])) {
+        $sectionId = 0;
     }
 
-    $hours = floor($diff / 3600);
-    $minutes = floor(($diff % 3600) / 60);
-    $seconds = $diff % 60;
+    return [$batchId, $sectionId];
+}
 
-    return sprintf('%02d:%02d:%02d', $hours, $minutes, $seconds);
+/**
+ * SQL EXISTS clause matching user enrollment to exam assignment filters.
+ *
+ * @return array{sql:string, params:array<int, mixed>}
+ */
+function buildExamEnrollmentFilterClause(PDO $pdo, int $examId, int $batchId, int $sectionId, string $userAlias = 'u'): array {
+    if ($batchId <= 0 && $sectionId <= 0) {
+        return ['sql' => '', 'params' => []];
+    }
+
+    if (examBatchHasSectionColumn($pdo)) {
+        $sql = "
+            AND EXISTS (
+                SELECT 1
+                FROM tbl_user_batch ub_f
+                INNER JOIN tbl_exam_batch eb_f ON eb_f.Batch_ID = ub_f.Batch_ID AND eb_f.Exam_ID = ?
+                INNER JOIN tbl_batch b_f ON ub_f.Batch_ID = b_f.Batch_ID
+                LEFT JOIN tbl_academic_section s_f ON b_f.Section_ID = s_f.Section_ID
+                LEFT JOIN tbl_batch pb_f ON s_f.Batch_ID = pb_f.Batch_ID
+                WHERE ub_f.User_ID = {$userAlias}.User_ID
+                  AND ub_f.Status = 'Active'
+        ";
+        $params = [$examId];
+
+        if ($batchId > 0) {
+            $sql .= ' AND COALESCE(pb_f.Batch_ID, b_f.Batch_ID) = ?';
+            $params[] = $batchId;
+        }
+        if ($sectionId > 0) {
+            $sql .= ' AND s_f.Section_ID = ?';
+            $params[] = $sectionId;
+        }
+
+        $sql .= '
+            )
+        ';
+
+        return ['sql' => $sql, 'params' => $params];
+    }
+
+    if ($batchId <= 0) {
+        return ['sql' => '', 'params' => []];
+    }
+
+    return [
+        'sql' => "
+            AND EXISTS (
+                SELECT 1
+                FROM tbl_user_batch ub_f
+                INNER JOIN tbl_exam_batch eb_f ON eb_f.Batch_ID = ub_f.Batch_ID AND eb_f.Exam_ID = ?
+                INNER JOIN tbl_batch b_f ON ub_f.Batch_ID = b_f.Batch_ID
+                WHERE ub_f.User_ID = {$userAlias}.User_ID
+                  AND ub_f.Status = 'Active'
+                  AND b_f.Batch_ID = ?
+            )
+        ",
+        'params' => [$examId, $batchId],
+    ];
+}
+
+function formatTimeTaken(?string $timeStarted, ?string $timeEnded, ?int $answeredCount = null): string {
+    return formatExamTimeTaken($timeStarted, $timeEnded, $answeredCount);
 }
 
 function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
@@ -177,8 +262,8 @@ function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
             es.Time_Started,
             es.Time_Ended,
             u.User_ID,
-            u.Fullname,
-            u.Academic_Number,
+            " . personNameSql('u') . " AS Fullname,
+            u.Badge_Number,
             {$rankSelect}
             {$enrollmentSelect},
             s.Subject_Name,
@@ -200,7 +285,6 @@ function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
         sendError('Result not found for this exam', 404);
     }
 
-    $result['time_taken'] = formatTimeTaken($result['Time_Started'], $result['Time_Ended']);
     $result['Duration_Minutes'] = $result['Duration'] ?? 0;
 
     $stmt = $pdo->prepare('SELECT COUNT(*) AS total FROM tbl_exam_question WHERE Exam_ID = ?');
@@ -211,6 +295,11 @@ function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
     $live = resolveLiveSessionScore($pdo, $sessionId, $examId, $result['total_questions']);
     $score = (float)$live['score'];
     $rawPercent = $live['raw_percent'];
+    $result['time_taken'] = formatExamTimeTaken(
+        $result['Time_Started'] ?? null,
+        $result['Time_Ended'] ?? null,
+        (int)($live['answered_count'] ?? 0)
+    );
 
     $result['Score'] = $score;
     $result['Percentage'] = $rawPercent;
@@ -267,6 +356,45 @@ function buildResultDetail(PDO $pdo, int $resultId, int $examId): array {
 
     $result['questions'] = $questions;
 
+    $historyFinished = finishedSittingPredicateSql('es_hist');
+    $historyStmt = $pdo->prepare("
+        SELECT
+            r_hist.Result_ID,
+            r_hist.Score,
+            r_hist.Percentage,
+            r_hist.Remarks,
+            r_hist.Submission_Date,
+            es_hist.Exam_ID,
+            es_hist.Time_Started,
+            es_hist.Time_Ended
+        FROM tbl_result r_hist
+        INNER JOIN tbl_exam_session es_hist ON es_hist.Session_ID = r_hist.Session_ID
+        WHERE es_hist.Exam_ID = ?
+          AND es_hist.User_ID = ?
+          AND {$historyFinished}
+        ORDER BY r_hist.Submission_Date ASC, r_hist.Result_ID ASC
+    ");
+    $historyStmt->execute([$examId, (int)$result['User_ID']]);
+    $history = annotateAttemptHistory($historyStmt->fetchAll(PDO::FETCH_ASSOC));
+    $result['attempt_history'] = array_map(static function (array $row): array {
+        return [
+            'Result_ID' => (int)$row['Result_ID'],
+            'attempt_number' => (int)($row['attempt_number'] ?? 0),
+            'is_latest' => !empty($row['is_latest']),
+            'Score' => $row['Score'],
+            'Percentage' => $row['Percentage'],
+            'Remarks' => $row['Remarks'],
+            'Submission_Date' => $row['Submission_Date'],
+        ];
+    }, $history);
+    foreach ($history as $historyRow) {
+        if ((int)$historyRow['Result_ID'] === (int)$result['Result_ID']) {
+            $result['attempt_number'] = (int)($historyRow['attempt_number'] ?? 1);
+            $result['is_latest'] = !empty($historyRow['is_latest']);
+            break;
+        }
+    }
+
     return $result;
 }
 
@@ -290,17 +418,21 @@ try {
         $totalItems = (int)($exam['question_count'] ?? 0);
         $passingScore = (float)($exam['Passing_Score'] ?? 50);
 
-        $stmt = $pdo->prepare('
-            SELECT es.Session_ID
+        $finishedSql = finishedSittingPredicateSql('es');
+        $latestSql = latestFinishedResultMatchSql('es', 'r');
+        $stmt = $pdo->prepare("
+            SELECT es.Session_ID, es.User_ID
             FROM tbl_exam_session es
             INNER JOIN tbl_result r ON r.Session_ID = es.Session_ID
             WHERE es.Exam_ID = ?
-              AND es.Time_Ended IS NOT NULL
-        ');
+              AND {$finishedSql}
+              AND {$latestSql}
+        ");
         $stmt->execute([$examId]);
         $finishedSessions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $finishedCount = count($finishedSessions);
+        $finishedUserCount = count(fetchExamFinishedSittingUserIds($pdo, $examId));
         $passedCount = 0;
         $gradeSum = 0.0;
         $highestGrade = null;
@@ -324,7 +456,7 @@ try {
             'exam' => $exam,
             'assigned_count' => $assignedCount,
             'finished_count' => $finishedCount,
-            'not_submitted_count' => max(0, $assignedCount - $finishedCount),
+            'not_submitted_count' => max(0, $assignedCount - $finishedUserCount),
             'passed_count' => $passedCount,
             'failed_count' => max(0, $finishedCount - $passedCount),
             'avg_grade' => $avgGrade,
@@ -345,17 +477,25 @@ try {
 
         $statusFilter = $_GET['status'] ?? 'all';
         $search = trim($_GET['search'] ?? '');
+        [$filterBatchId, $filterSectionId] = parseAssignmentFilterParams($exam['Assignments'] ?? []);
+        $enrollmentFilter = buildExamEnrollmentFilterClause($pdo, $examId, $filterBatchId, $filterSectionId, 'u');
         $hasPersonnelRank = personnelRankColumnExists($pdo);
         $rankSelect = $hasPersonnelRank ? 'u.Personnel_Rank,' : 'NULL AS Personnel_Rank,';
         $enrollmentSelect = userExamEnrollmentSelectSql($pdo, 'u');
 
+        $finishedSql = finishedSittingPredicateSql('es');
+        $latestSql = latestFinishedResultMatchSql('es', 'r');
+        $retakeSelect = retakeColumnsExist($pdo)
+            ? 'es.Retake_Granted, es.Is_Retake,'
+            : '0 AS Retake_Granted, 0 AS Is_Retake,';
+        $attemptCountFinished = finishedSittingPredicateSql('es_count');
         $sql = "
             SELECT
                 r.Result_ID,
                 es.Session_ID,
                 u.User_ID,
-                u.Fullname,
-                u.Academic_Number,
+                " . personNameSql('u') . " AS Fullname,
+                u.Badge_Number,
                 {$rankSelect}
                 {$enrollmentSelect},
                 r.Score,
@@ -364,18 +504,29 @@ try {
                 r.Submission_Date,
                 es.Time_Started,
                 es.Time_Ended,
+                es.Cheating_Locked,
+                {$retakeSelect}
+                (
+                    SELECT COUNT(*)
+                    FROM tbl_exam_session es_count
+                    INNER JOIN tbl_result r_count ON r_count.Session_ID = es_count.Session_ID
+                    WHERE es_count.Exam_ID = es.Exam_ID
+                      AND es_count.User_ID = es.User_ID
+                      AND {$attemptCountFinished}
+                ) AS attempt_count,
                 e.Passing_Score
             FROM tbl_result r
             INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
             INNER JOIN tbl_exam e ON es.Exam_ID = e.Exam_ID
             INNER JOIN tbl_user u ON es.User_ID = u.User_ID
             WHERE es.Exam_ID = ?
-              AND es.Time_Ended IS NOT NULL
+              AND {$finishedSql}
+              AND {$latestSql}
         ";
         $params = prependExamEnrollmentParams($pdo, $examId, [$examId]);
 
         if ($search !== '') {
-            $sql .= ' AND (u.Fullname LIKE ? OR u.Academic_Number LIKE ?';
+            $sql .= ' AND (' . personNameSql('u') . ' LIKE ? OR u.Badge_Number LIKE ?';
             if ($hasPersonnelRank) {
                 $sql .= ' OR u.Personnel_Rank LIKE ?';
             }
@@ -387,6 +538,9 @@ try {
                 $params[] = $like;
             }
         }
+
+        $sql .= $enrollmentFilter['sql'];
+        $params = array_merge($params, $enrollmentFilter['params']);
 
         $sql .= ' ORDER BY r.Score DESC, r.Percentage DESC, r.Submission_Date ASC';
 
@@ -425,11 +579,16 @@ try {
             sendError('exam_id is required');
         }
 
-        fetchExamOrFail($pdo, $examId);
+        $exam = fetchExamOrFail($pdo, $examId);
+        [$filterBatchId, $filterSectionId] = parseAssignmentFilterParams($exam['Assignments'] ?? []);
+        $enrollmentFilter = buildExamEnrollmentFilterClause($pdo, $examId, $filterBatchId, $filterSectionId, 'u');
 
         $enrollmentSelect = userExamEnrollmentSelectSql($pdo, 'u');
+        $hasPersonnelRank = personnelRankColumnExists($pdo);
+        $rankSelect = $hasPersonnelRank ? 'u.Personnel_Rank,' : 'NULL AS Personnel_Rank,';
         $participantFilter = '';
-        $params = prependExamEnrollmentParams($pdo, $examId, [$examId, $examId]);
+        $finishedSql = examUserHasFinishedSittingSql('u.User_ID', (string)$examId);
+        $params = prependExamEnrollmentParams($pdo, $examId, [$examId]);
 
         if (examParticipantTableExists($pdo)) {
             $participantFilter = "
@@ -447,8 +606,9 @@ try {
         $stmt = $pdo->prepare("
             SELECT DISTINCT
                 u.User_ID,
-                u.Fullname,
-                u.Academic_Number,
+                " . personNameSql('u') . " AS Fullname,
+                u.Badge_Number,
+                {$rankSelect}
                 {$enrollmentSelect}
             FROM tbl_exam_batch eb
             INNER JOIN tbl_user_batch ub ON eb.Batch_ID = ub.Batch_ID
@@ -456,15 +616,11 @@ try {
             WHERE eb.Exam_ID = ?
               AND ub.Status = 'Active'
               {$participantFilter}
-              AND u.User_ID NOT IN (
-                  SELECT es.User_ID
-                  FROM tbl_exam_session es
-                  INNER JOIN tbl_result r ON r.Session_ID = es.Session_ID
-                  WHERE es.Exam_ID = ?
-                    AND es.Time_Ended IS NOT NULL
-              )
-            ORDER BY u.Fullname ASC
+              {$enrollmentFilter['sql']}
+              AND NOT {$finishedSql}
+            ORDER BY " . personNameSql('u') . " ASC
         ");
+        $params = array_merge($params, $enrollmentFilter['params']);
         $stmt->execute($params);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -514,8 +670,169 @@ try {
         sendSuccess($analysis);
     }
 
+    if ($action === 'grant_retake') {
+        if (($_SESSION['user_role'] ?? '') !== 'Admin') {
+            sendError('Only an administrator can allow a retake.', 403);
+        }
+
+        if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+            sendError('Method not allowed', 405);
+        }
+
+        $resultId = (int)($_GET['result_id'] ?? 0);
+        if (!$examId || !$resultId) {
+            sendError('exam_id and result_id are required');
+        }
+
+        $exam = fetchExamOrFail($pdo, $examId);
+
+        if ((int)($exam['Is_Archived'] ?? 0) === 1) {
+            sendError('This exam is archived.', 403);
+        }
+
+        if (($exam['Status'] ?? '') !== 'Published') {
+            sendError('This exam is not open. Publish it before allowing a retake.', 403);
+        }
+
+        $scheduleStmt = $pdo->prepare('SELECT Schedule_Date, Deadline FROM tbl_exam WHERE Exam_ID = ?');
+        $scheduleStmt->execute([$examId]);
+        $schedule = $scheduleStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $exam['Schedule_Date'] = $schedule['Schedule_Date'] ?? null;
+        $exam['Deadline'] = $schedule['Deadline'] ?? null;
+
+        $scheduleError = validateExamScheduleStarted($exam);
+        if ($scheduleError !== null) {
+            sendError($scheduleError, 403);
+        }
+
+        $deadlineError = validateExamDeadlineWithGrace($exam);
+        if ($deadlineError !== null) {
+            sendError('The exam deadline has passed. Extend the deadline before allowing a retake.', 403);
+        }
+
+        if (!retakeColumnsExist($pdo)) {
+            sendError('Retake authorization is not available until the database update is applied.', 503);
+        }
+
+        $stmt = $pdo->prepare('
+            SELECT
+                r.Result_ID,
+                es.Session_ID,
+                es.User_ID,
+                es.Time_Started,
+                es.Time_Ended,
+                es.Is_Retake,
+                es.Cheating_Locked
+            FROM tbl_result r
+            INNER JOIN tbl_exam_session es ON r.Session_ID = es.Session_ID
+            WHERE r.Result_ID = ?
+              AND es.Exam_ID = ?
+            LIMIT 1
+        ');
+        $stmt->execute([$resultId, $examId]);
+        $attempt = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$attempt) {
+            sendError('Submitted attempt not found', 404);
+        }
+
+        if (empty($attempt['Time_Ended'])) {
+            sendError('This attempt is still in progress.', 409);
+        }
+
+        if ((int)($attempt['Is_Retake'] ?? 0) === 1) {
+            sendError('A retake cannot be authorized from a retake attempt.', 409);
+        }
+
+        if (empty($attempt['Time_Started']) || sessionStartedAndEndedTogether(
+            $attempt['Time_Started'] ?? null,
+            $attempt['Time_Ended'] ?? null
+        )) {
+            sendError('A retake can be authorized only for a completed original attempt.', 409);
+        }
+
+        $sessionId = (int)$attempt['Session_ID'];
+        $userId = (int)$attempt['User_ID'];
+        $totalItems = (int)($exam['question_count'] ?? 0);
+        $live = resolveLiveSessionScore($pdo, $sessionId, $examId, $totalItems);
+        $scoreLabel = $totalItems > 0
+            ? ($live['score'] . '/' . $totalItems)
+            : (string)$live['score'];
+        $passingScore = (float)($exam['Passing_Score'] ?? 50);
+        $remarks = $live['raw_percent'] >= $passingScore ? 'Passed' : 'Failed';
+        $examineeLabel = auditUserLabel($pdo, $userId);
+        $examLabel = auditExamLabel($pdo, $examId);
+
+        $pdo->beginTransaction();
+        try {
+            lockUserExamSessions($pdo, $userId, $examId);
+            $finishedCount = countFinishedSittings($pdo, $userId, $examId);
+            if ($finishedCount >= 2) {
+                $pdo->rollBack();
+                sendError('This trainee has already used their one retake.', 409);
+            }
+            if ($finishedCount !== 1) {
+                $pdo->rollBack();
+                sendError('A retake can be authorized only after the original sitting is completed.', 409);
+            }
+
+            $openRetake = $pdo->prepare('
+                SELECT Session_ID
+                FROM tbl_exam_session
+                WHERE User_ID = ? AND Exam_ID = ? AND Time_Ended IS NULL AND Is_Retake = 1
+                LIMIT 1
+            ');
+            $openRetake->execute([$userId, $examId]);
+            if ($openRetake->fetchColumn()) {
+                $pdo->rollBack();
+                sendError('A retake is already in progress for this trainee.', 409);
+            }
+
+            $grantUpdate = $pdo->prepare('
+                UPDATE tbl_exam_session
+                SET Retake_Granted = 1
+                WHERE Session_ID = ?
+                  AND Exam_ID = ?
+                  AND User_ID = ?
+                  AND Retake_Granted = 0
+                  AND Is_Retake = 0
+                  AND Time_Started IS NOT NULL
+                  AND Time_Ended IS NOT NULL
+                  AND Time_Started <> Time_Ended
+            ');
+            $grantUpdate->execute([$sessionId, $examId, $userId]);
+            if ($grantUpdate->rowCount() !== 1) {
+                $pdo->rollBack();
+                sendError('A retake is already authorized for this trainee.', 409);
+            }
+
+            auditFromSession(
+                $pdo,
+                'EXAM',
+                'GRANT_EXAM_RETAKE',
+                "Granted one retake to {$examineeLabel} for \"{$examLabel}\" (original result kept: {$scoreLabel}, {$remarks}).",
+                'SUCCESS',
+                'exam',
+                $examId
+            );
+            $pdo->commit();
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        sendSuccess([
+            'result_id' => $resultId,
+            'user_id' => $userId,
+            'message' => 'Retake allowed',
+        ]);
+    }
+
     sendError('Invalid action');
 } catch (Exception $e) {
+    error_log('exam-responses.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }

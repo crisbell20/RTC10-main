@@ -1,6 +1,4 @@
-/**
- * Examinee Profile Page
- */
+// Examinee profile
 
 const PROFILE_API = '../../api/examinee/profile.php';
 const CHANGE_PASSWORD_API = '../../api/auth/change-password.php';
@@ -43,23 +41,24 @@ function renderProfile(data) {
 
     const metaParts = [];
     if (profile.Personnel_Rank) metaParts.push(`Rank: ${profile.Personnel_Rank}`);
-    if (profile.Academic_Number) metaParts.push(`Academic No.: ${profile.Academic_Number}`);
+    if (profile.Badge_Number) metaParts.push(`Badge No.: ${profile.Badge_Number}`);
     document.getElementById('profileMeta').textContent = metaParts.length
         ? metaParts.join('  •  ')
         : 'Trainee account';
 
     document.getElementById('profileBadges').innerHTML = [
         statusBadge(profile.Status),
-        profile.Role_Name ? `<span class="badge bg-light text-dark">${escapeHtml(profile.Role_Name)}</span>` : '',
-        profile.Must_Change_Password ? '<span class="badge bg-warning text-dark">Password reset required</span>' : ''
+        profile.Role_Name ? `<span class="badge bg-light text-dark">${escapeHtml(profile.Role_Name)}</span>` : ''
     ].filter(Boolean).join('');
 
     document.getElementById('accountInfoGrid').innerHTML = [
-        infoItem('Full Name', profile.Fullname),
-        infoItem('Academic Number', profile.Academic_Number || '—'),
+        infoItem('Last Name', profile.Lastname || '—'),
+        infoItem('First Name', profile.Firstname || '—'),
+        infoItem('Middle Name', profile.Middlename || '—'),
+        infoItem('Badge Number', profile.Badge_Number || '—'),
         infoItem('Personnel Rank', profile.Personnel_Rank || '—'),
         infoItem('Account Status', profile.Status),
-        infoItem('Member Since', formatDateTime(profile.Date_Created))
+        infoItem('Created', formatDateTime(profile.Date_Created))
     ].join('');
 
     const emailInput = document.getElementById('profileEmailInput');
@@ -68,8 +67,7 @@ function renderProfile(data) {
     }
 
     document.getElementById('securityInfoGrid').innerHTML = [
-        infoItem('Last Login', data.last_login ? formatDateTime(data.last_login) : '—'),
-        infoItem('Password Status', profile.Must_Change_Password ? 'Reset required' : 'Up to date')
+        infoItem('Last Login', data.last_login ? formatDateTime(data.last_login) : '—')
     ].join('');
 
     renderEnrollments(enrollments);
@@ -83,7 +81,7 @@ function renderEnrollments(enrollments) {
     const container = document.getElementById('enrollmentSection');
 
     if (!enrollments.length) {
-        container.innerHTML = '<p class="text-muted mb-0">No enrollment records found. Contact your administrator if this is incorrect.</p>';
+        container.innerHTML = '<p class="text-muted mb-0">No assignment records found. Contact your administrator if this is incorrect.</p>';
         return;
     }
 
@@ -95,7 +93,7 @@ function renderEnrollments(enrollments) {
                 ${row.Section_Name ? ' • ' + escapeHtml(row.Section_Name) : ''}
             </div>
             <div class="enrollment-meta">
-                Enrolled: ${formatDate(row.Date_Enrolled)}
+                Assigned: ${formatDate(row.Date_Enrolled)}
                 ${row.Date_Started ? ' • Started: ' + formatDate(row.Date_Started) : ''}
                 ${row.Date_Ended ? ' • Ends: ' + formatDate(row.Date_Ended) : ''}
             </div>
@@ -253,7 +251,7 @@ function showFatalError(message) {
         icon: 'error',
         confirmButtonText: 'Go to Exams'
     }).then(() => {
-        window.location.href = '../examinee/dashboard.php';
+        window.location.href = 'dashboard.php';
     });
 }
 
@@ -264,16 +262,14 @@ function escapeHtml(text) {
 }
 
 function formatDate(dateStr) {
-    if (!dateStr) return '—';
-    const date = new Date(dateStr);
-    if (Number.isNaN(date.getTime())) return '—';
+    const date = parseExamDateTime(dateStr);
+    if (!date) return '—';
     return date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function formatDateTime(dateStr) {
-    if (!dateStr) return '—';
-    const date = new Date(dateStr);
-    if (Number.isNaN(date.getTime())) return '—';
+    const date = parseExamDateTime(dateStr);
+    if (!date) return '—';
     return date.toLocaleString('en-US', {
         year: 'numeric',
         month: 'long',

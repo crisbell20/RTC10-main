@@ -1,21 +1,18 @@
 <?php
-/**
- * Start Exam API
- * Creates a new exam session for an examinee
- */
+
+// Examinee Start Exam API
 
 header('Content-Type: application/json');
 session_start();
 
 require_once '../config/connection-pdo.php';
+/** @var PDO $pdo */
 require_once '../includes/exam-code-utils.php';
 require_once '../includes/exam-participant-utils.php';
 require_once '../includes/exam-session-utils.php';
 require_once '../includes/validation-utils.php';
+require_once '../includes/archive-utils.php';
 
-/**
- * Send success response
- */
 function sendSuccess($data) {
     http_response_code(200);
     echo json_encode([
@@ -25,9 +22,6 @@ function sendSuccess($data) {
     exit;
 }
 
-/**
- * Send error response
- */
 function sendError($message, $statusCode = 400) {
     http_response_code($statusCode);
     echo json_encode([
@@ -43,7 +37,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'Examinee') {
-    sendError('Access denied. This resource is only available to examinees.', 403);
+        sendError('Access denied. This resource is only available to trainees.', 403);
 }
 
 $userId = $_SESSION['user_id'];
@@ -86,8 +80,29 @@ try {
         $pdo->rollBack();
         sendError('This exam is no longer available', 403);
     }
+
+    // Block start when subject/course for this exam is archived
+    if (archiveColumnExists($pdo, 'tbl_subject') && archiveColumnExists($pdo, 'tbl_course')) {
+        $curriculumStmt = $pdo->prepare('
+            SELECT s.Is_Archived AS Subject_Archived, c.Is_Archived AS Course_Archived
+            FROM tbl_exam e
+            INNER JOIN tbl_subject s ON e.Subject_ID = s.Subject_ID
+            INNER JOIN tbl_course c ON s.Course_ID = c.Course_ID
+            WHERE e.Exam_ID = ?
+            LIMIT 1
+        ');
+        $curriculumStmt->execute([$examId]);
+        $curriculum = $curriculumStmt->fetch(PDO::FETCH_ASSOC);
+        if ($curriculum && (
+            (int)($curriculum['Subject_Archived'] ?? 0) === 1
+            || (int)($curriculum['Course_Archived'] ?? 0) === 1
+        )) {
+            $pdo->rollBack();
+            sendError('This exam is no longer available', 403);
+        }
+    }
     
-    // Validate exam has questions assigned (Requirement 10.1, 10.2)
+    // Validate exam has questions assigned
     $questionCountQuery = "
         SELECT COUNT(*) as question_count 
         FROM tbl_exam_question 
@@ -102,14 +117,17 @@ try {
         sendError('This exam has no questions assigned', 400);
     }
     
-    // Validate exam is assigned to user's active batch (Requirement 10.3, 10.4)
+    // Validate exam is assigned to user's active, non-archived batch
+    $batchActive = activeArchiveCondition($pdo, 'tbl_batch', 'b');
     $batchAssignmentQuery = "
         SELECT COUNT(*) as batch_match 
         FROM tbl_exam_batch eb
+        INNER JOIN tbl_batch b ON eb.Batch_ID = b.Batch_ID
         INNER JOIN tbl_user_batch ub ON eb.Batch_ID = ub.Batch_ID
         WHERE eb.Exam_ID = ? 
         AND ub.User_ID = ? 
         AND ub.Status = 'Active'
+        AND {$batchActive}
     ";
     $stmt = $pdo->prepare($batchAssignmentQuery);
     $stmt->execute([$examId, $userId]);
@@ -125,7 +143,7 @@ try {
         sendError('You are not selected to take this exam. Contact your instructor.', 403);
     }
     
-    // Validate exam status is Published (Requirement 10.5, 10.6)
+    // Validate exam status is Published
     if ($exam['Status'] !== 'Published') {
         $pdo->rollBack();
         sendError('This exam is not available', 400);
@@ -137,44 +155,44 @@ try {
         sendError($scheduleError, 403);
     }
     
-    // Check if deadline has passed (same moment as auto-close — no grace period)
+    // Check if deadline has passed 
     $deadlineError = validateExamDeadlineWithGrace($exam);
     if ($deadlineError !== null) {
         $pdo->rollBack();
         sendError($deadlineError, 403);
     }
-    
-    // Remove no-answer failed / abandoned attempts so reopen retake can proceed
-    clearRetakeEligibleAttemptsForUser($pdo, (int)$userId, (int)$examId);
 
-    if (userHasCompletedExamAttempt($pdo, (int)$userId, (int)$examId)) {
-        $pdo->rollBack();
-        sendError('You have already completed this exam', 403);
+    // Lock this trainee's sittings so a second request cannot open another retake.
+    $lockedSessions = lockUserExamSessions($pdo, (int)$userId, (int)$examId);
+    $activeSession = null;
+    foreach ($lockedSessions as $lockedSession) {
+        if (empty($lockedSession['Time_Ended'])) {
+            $activeSession = $lockedSession;
+            break;
+        }
     }
 
-    // Check for existing active session (not ended)
-    $activeQuery = "
-        SELECT Session_ID, Time_Started
-        FROM tbl_exam_session
-        WHERE User_ID = ?
-        AND Exam_ID = ?
-        AND Time_Ended IS NULL
-    ";
-    $stmt = $pdo->prepare($activeQuery);
-    $stmt->execute([$userId, $examId]);
-    $activeSession = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($activeSession && (int)($activeSession['Cheating_Locked'] ?? 0) === 1) {
+    $pdo->rollBack();
+    sendError(
+        'This exam is locked due to recorded violations. Please contact the administrator.',
+        403
+    );
+}
 
     if ($activeSession) {
         $sessionId = (int)$activeSession['Session_ID'];
         $durationMinutes = (int)($exam['Duration'] ?? 0);
 
-        reviveExpiredEmptySession(
+        if (finalizeSessionIfDurationExpired(
             $pdo,
             $sessionId,
-            (int)$examId,
             $activeSession['Time_Started'],
             $durationMinutes
-        );
+        )) {
+            $pdo->commit();
+            sendError('Exam time has expired. Your attempt has been submitted.', 403);
+        }
 
         $pdo->commit();
         sendSuccess([
@@ -184,7 +202,17 @@ try {
         ]);
     }
 
-    // Validate exam access code for new sessions
+    // Remove missed-deadline placeholders so never-started examinees can start after reopen
+    clearRetakeEligibleAttemptsForUser($pdo, (int)$userId, (int)$examId);
+    lockUserExamSessions($pdo, (int)$userId, (int)$examId);
+
+    $attemptGate = evaluateNewAttemptGate($pdo, (int)$userId, (int)$examId);
+    if (empty($attemptGate['allowed'])) {
+        $pdo->rollBack();
+        sendError('You have already completed this exam', 403);
+    }
+
+    // Validate exam access code
     if ($hasExamCode && !empty($exam['Exam_Code'])) {
         $failedAttempts = getRecentFailedCodeAttempts($pdo, (int)$examId, (int)$userId);
         if ($failedAttempts >= 5) {
@@ -204,17 +232,29 @@ try {
         logExamCodeAttempt($pdo, (int)$examId, (int)$userId, true);
     }
     
+    $isRetake = !empty($attemptGate['is_retake']);
+    if ($isRetake && !consumeRetakeGrant($pdo, (int)$attemptGate['grant_session_id'])) {
+        $pdo->rollBack();
+        sendError('You have already completed this exam', 403);
+    }
+
     // Create new exam session
-    $insertQuery = "
-        INSERT INTO tbl_exam_session (Exam_ID, User_ID, Time_Started) 
-        VALUES (?, ?, NOW())
-    ";
+    if ($isRetake) {
+        $insertQuery = "
+            INSERT INTO tbl_exam_session (Exam_ID, User_ID, Time_Started, Is_Retake)
+            VALUES (?, ?, NOW(), 1)
+        ";
+    } else {
+        $insertQuery = "
+            INSERT INTO tbl_exam_session (Exam_ID, User_ID, Time_Started)
+            VALUES (?, ?, NOW())
+        ";
+    }
     $stmt = $pdo->prepare($insertQuery);
     $stmt->execute([$examId, $userId]);
     
     $sessionId = $pdo->lastInsertId();
     
-    // Commit transaction
     $pdo->commit();
     
     sendSuccess([

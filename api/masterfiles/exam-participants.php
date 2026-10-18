@@ -18,11 +18,11 @@ $input = json_decode($rawInput, true) ?? [];
 $action = $_GET['action'] ?? ($input['action'] ?? '');
 $userRole = $_SESSION['user_role'] ?? '';
 
-function requireAdminRoleForParticipants(): void {
+function requireExamManagerRoleForParticipants(): void {
     global $userRole;
     if ($userRole !== 'Admin') {
         http_response_code(403);
-        echo json_encode(['success' => false, 'message' => 'Only administrators can modify participants']);
+        echo json_encode(['success' => false, 'message' => 'Forbidden: Admin access required']);
         exit;
     }
 }
@@ -32,7 +32,7 @@ try {
         http_response_code(503);
         echo json_encode([
             'success' => false,
-            'message' => 'Participant table is not available. Run scripts/migrations/run_exam_participants_migration.php first.',
+            'message' => 'Participant table is not available. Import scripts/migrations/add_exam_participants.sql on the database first.',
         ]);
         exit;
     }
@@ -81,8 +81,37 @@ try {
         exit;
     }
 
+    if ($request_method === 'GET' && $action === 'list_by_sections') {
+        requireExamManagerRoleForParticipants();
+        $raw = $_GET['section_ids'] ?? '';
+        $sectionIds = is_array($raw) ? $raw : explode(',', (string)$raw);
+        $sectionIds = array_values(array_unique(array_filter(array_map('intval', $sectionIds), static function ($id) {
+            return $id > 0;
+        })));
+
+        if (empty($sectionIds)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'message' => 'Assign at least one section before selecting participants']);
+            exit;
+        }
+
+        $eligible = getEligibleParticipantsBySectionIds($pdo, $sectionIds);
+
+        http_response_code(200);
+        echo json_encode([
+            'success' => true,
+            'data' => [
+                'eligible_count' => count($eligible),
+                'selected_count' => 0,
+                'selected_ids' => [],
+                'groups' => groupEligibleParticipantsBySection($eligible, []),
+            ],
+        ]);
+        exit;
+    }
+
     if ($request_method === 'POST' && $action === 'save') {
-        requireAdminRoleForParticipants();
+        requireExamManagerRoleForParticipants();
         $exam_id = (int)($input['exam_id'] ?? 0);
         $user_ids = $input['user_ids'] ?? [];
 
@@ -136,7 +165,7 @@ try {
     }
 
     if ($request_method === 'POST' && $action === 'sync') {
-        requireAdminRoleForParticipants();
+        requireExamManagerRoleForParticipants();
         $exam_id = (int)($input['exam_id'] ?? 0);
         if ($exam_id <= 0) {
             http_response_code(400);
@@ -158,6 +187,7 @@ try {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Invalid action']);
 } catch (Exception $e) {
+    error_log('exam-participants.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }

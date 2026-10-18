@@ -30,21 +30,17 @@ A comprehensive web-based examination system for the Philippine National Police 
    cd RTC10
    ```
 
-2. Import the database:
+2. Import the current database dump in phpMyAdmin or:
    ```bash
-   mysql -u root -p < db_rtc.sql
+   mysql -u root -p db_rtc10 < path/to/your-dump.sql
    ```
+   Do not place `.sql` dumps in the web root.
 
 3. Configure database connection:
    - Copy `api/config/connection-pdo.php.example` to `api/config/connection-pdo.php`
    - Update database credentials
 
-4. Run migrations:
-   ```bash
-   php scripts/migrations/run_deadline_migration.php
-   ```
-
-5. Access the system:
+4. Access the system:
    ```
    http://localhost/RTC10
    ```
@@ -66,8 +62,9 @@ RTC10/
 ├── html/                   # Frontend pages
 ├── js/                     # JavaScript files
 ├── assets/                 # CSS, images, etc.
-├── scripts/               # Utility scripts and migrations
-└── db_rtc.sql            # Database schema
+└── scripts/               # CLI cron jobs (HTTP denied)
+    ├── cron/              # Scheduled purge / auto-archive
+    └── migrations/        # SQL reference only (import via MySQL CLI)
 
 ```
 
@@ -90,17 +87,14 @@ RTC10/
 
 ## Development
 
-### Running Migrations
-```bash
-php scripts/migrations/run_deadline_migration.php
-```
-
 ### Auto-Close Setup (Optional)
-See `scripts/CRON_SETUP.md` for scheduled task setup.
+See `scripts/CRON_SETUP.md` for scheduled task setup. Run those PHP files from the command line only.
 
 ## Security Notes
 
 - Never commit `api/config/connection-pdo.php` (contains DB credentials)
+- Do not keep database dumps in the web root
+- Maintenance scripts under `scripts/` are CLI-only; Apache denies HTTP to that folder
 - Change default passwords after installation
 - Use HTTPS in production
 - Regular database backups recommended

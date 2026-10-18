@@ -21,19 +21,20 @@ $mustChangePassword = isset($_SESSION['must_change_password']) ? (int)$_SESSION[
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <?php require __DIR__ . '/../includes/sidebar-state-early.php'; ?>
     <title>Exams - PNP RTC X</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="../../assets/css/dashboard.css">
-    <link rel="stylesheet" href="../../assets/css/examinee-responsive.css?v=4">
+    <link rel="stylesheet" href="../../assets/css/dashboard.css?v=1">
+    <link rel="stylesheet" href="../../assets/css/examinee-responsive.css?v=13">
 </head>
 <body class="examinee-portal">
     <!-- Top Navigation -->
     <div class="top-nav">
-        <div class="nav-brand">
-            <h5>PNP Regional Training Center X</h5>
-            <p>Trainee Assessment & Learning Portal</p>
-        </div>
+        <?php
+        $navBrandSubtitle = 'Exams';
+        require __DIR__ . '/../includes/nav-brand.php';
+        ?>
         <div class="nav-user">
             <span class="nav-user-name"><?= htmlspecialchars($userName) ?></span>
             <button class="btn-logout" id="logoutBtn"><i class="bi bi-box-arrow-right"></i></button>
@@ -77,9 +78,6 @@ $mustChangePassword = isset($_SESSION['must_change_password']) ? (int)$_SESSION[
                         <div class="stat-icon icon-green"><i class="bi bi-check-circle-fill"></i></div>
                     </div>
                     <div class="stat-value" id="examsCompleted">--</div>
-                    <div class="stat-footer">
-                        <span id="completionRate">--</span>
-                    </div>
                 </div>
 
                 <div class="stat-card purple">
@@ -122,7 +120,6 @@ $mustChangePassword = isset($_SESSION['must_change_password']) ? (int)$_SESSION[
                                 <tr>
                                     <th>Exam Title</th>
                                     <th>Description</th>
-                                    <th>Course</th>
                                     <th>Subject</th>
                                     <th>Questions</th>
                                     <th>Duration</th>
@@ -157,7 +154,7 @@ $mustChangePassword = isset($_SESSION['must_change_password']) ? (int)$_SESSION[
                                     <th>Exam Title</th>
                                     <th>Date Taken</th>
                                     <th>Score</th>
-                                    <th>Percentage</th>
+                                    <th>Average</th>
                                     <th>Status</th>
                                 </tr>
                             </thead>
@@ -181,85 +178,14 @@ $mustChangePassword = isset($_SESSION['must_change_password']) ? (int)$_SESSION[
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <script src="../../assets/js/logout-handler.js?v=1"></script>
-    <script src="../../assets/js/examinee-responsive-nav.js?v=1"></script>
-    <script src="../../assets/js/auto-logout.js"></script>
-    <script src="../../assets/js/password-policy.js?v=2"></script>
-    <script src="../../js/examinee/examinee-dashboard.js?v=12"></script>
+    <script src="../../assets/js/examinee-responsive-nav.js?v=7"></script>
+    <script src="../../assets/js/auto-logout.js?v=2"></script>
+    <script src="../../assets/js/password-policy.js?v=3"></script>
+    <script src="../../assets/js/parse-datetime.js?v=1"></script>
+    <script src="../../js/examinee/examinee-dashboard.js?v=17"></script>
     <script>
         const MUST_CHANGE_PASSWORD = <?= $mustChangePassword ? 'true' : 'false' ?>;
-
-        // Password reset flow for first login
-        function openPasswordResetModal() {
-            Swal.fire({
-                title: 'Reset Password',
-                html: getPasswordChangeFormHtml(),
-                width: window.matchMedia('(max-width: 575.98px)').matches ? '92%' : '32rem',
-                didOpen: () => {
-                    bindPasswordChangeFormValidation();
-                },
-                focusConfirm: false,
-                allowOutsideClick: false,
-                allowEscapeKey: false,
-                confirmButtonText: 'Reset Password',
-                showCancelButton: true,
-                cancelButtonText: 'Cancel',
-                preConfirm: () => {
-                    const current = document.getElementById('curPwd').value;
-                    const next = document.getElementById('newPwd').value;
-                    const confirm = document.getElementById('confPwd').value;
-                    if (!current || !next || !confirm) {
-                        Swal.showValidationMessage('All fields are required');
-                        return false;
-                    }
-                    if (next !== confirm) {
-                        Swal.showValidationMessage('New password and confirmation do not match');
-                        return false;
-                    }
-                    if (next === current) {
-                        Swal.showValidationMessage('New password must be different from your current password');
-                        return false;
-                    }
-                    const passwordError = validatePasswordPolicy(next);
-                    if (passwordError) {
-                        Swal.showValidationMessage(passwordError);
-                        return false;
-                    }
-                    return { current, next, confirm };
-                }
-            }).then(result => {
-                if (result.dismiss === Swal.DismissReason.cancel) {
-                    axios.post('../../api/auth/change-password.php', { action: 'dismiss_must_change' })
-                        .then(res => {
-                            if (res.data.success) {
-                                Swal.fire('Notice', res.data.message || 'You can change your password later from Profile.', 'info');
-                            }
-                        })
-                        .catch(() => {});
-                    return;
-                }
-                if (!result.value) return;
-                axios.post('../../api/auth/change-password.php', {
-                    current_password: result.value.current,
-                    new_password: result.value.next,
-                    confirm_password: result.value.confirm
-                }).then(res => {
-                    if (res.data.success) {
-                        Swal.fire('Success', 'Password updated successfully', 'success');
-                    } else {
-                        Swal.fire('Error', res.data.message || 'Failed to update password', 'error')
-                            .then(() => openPasswordResetModal());
-                    }
-                }).catch(err => {
-                    const msg = err.response?.data?.message || 'Failed to update password';
-                    Swal.fire('Error', msg, 'error').then(() => openPasswordResetModal());
-                });
-            });
-        }
-
-        if (MUST_CHANGE_PASSWORD) {
-            // slight delay so UI renders behind the modal
-            setTimeout(openPasswordResetModal, 500);
-        }
     </script>
+    <script src="../../js/examinee/first-login-password.js?v=1"></script>
 </body>
 </html>

@@ -1,10 +1,14 @@
 <?php
 
+// User import
+
 require_once __DIR__ . '/batch-enrollment-utils.php';
 require_once __DIR__ . '/user-identity-utils.php';
 require_once __DIR__ . '/password-utils.php';
 require_once __DIR__ . '/exam-code-utils.php';
 require_once __DIR__ . '/audit-log-utils.php';
+require_once __DIR__ . '/validation-utils.php';
+require_once __DIR__ . '/person-name-utils.php';
 
 /**
  * Normalize a spreadsheet row into import fields.
@@ -24,28 +28,29 @@ function normalizeBulkExamineeImportRow(array $row): array
         return '';
     };
 
+    $parts = resolveImportNameParts($row);
+
     return [
-        'fullname' => $get($row, ['Fullname', 'Full Name', 'full_name', 'fullname', 'Name']),
-        'academic_number' => normalizeAcademicNumber($get($row, ['Academic_Number', 'Academic Number', 'academic_number', 'Academic No', 'Academic No.'])),
+        'firstname' => $parts['firstname'],
+        'middlename' => $parts['middlename'] ?? '',
+        'lastname' => $parts['lastname'],
+        'fullname' => formatPersonName($parts['firstname'], $parts['middlename'], $parts['lastname']),
+        'badge_number' => normalizeBadgeNumber($get($row, [
+            'Badge_Number', 'Badge Number', 'badge_number', 'Badge No', 'Badge No.',
+            'Academic_Number', 'Academic Number', 'academic_number', 'Academic No', 'Academic No.',
+        ])),
         'email' => $get($row, ['Email', 'email']),
         'personnel_rank' => normalizePersonnelRank($get($row, ['Personnel_Rank', 'Personnel Rank', 'personnel_rank', 'Rank'])),
     ];
 }
 
-function validateBulkExamineeFullname(?string $fullname): ?string
+function validateBulkExamineeName(array $normalized): ?string
 {
-    $fullname = trim((string)$fullname);
-    if ($fullname === '') {
-        return 'Full name is required';
-    }
-    if (!preg_match("/^[a-zA-Z\s.\-']+$/", $fullname)) {
-        return 'Full name must contain only letters, spaces, dots, hyphens, and apostrophes';
-    }
-    if (strlen($fullname) < 2 || strlen($fullname) > 100) {
-        return 'Full name must be between 2 and 100 characters';
-    }
-
-    return null;
+    return validatePersonNameParts(
+        $normalized['firstname'] ?? '',
+        $normalized['lastname'] ?? '',
+        $normalized['middlename'] ?? ''
+    );
 }
 
 function userBatchTableExists(PDO $pdo): bool
@@ -80,14 +85,14 @@ function getExamineeRoleId(PDO $pdo): ?int
     return $roleId;
 }
 
-function findUserIdByAcademicNumber(PDO $pdo, ?string $academicNumber): ?int
+function findUserIdByBadgeNumber(PDO $pdo, ?string $badgeNumber): ?int
 {
-    $normalized = normalizeAcademicNumber($academicNumber);
+    $normalized = normalizeBadgeNumber($badgeNumber);
     if ($normalized === null) {
         return null;
     }
 
-    $stmt = $pdo->prepare('SELECT User_ID FROM tbl_user WHERE Academic_Number = ? LIMIT 1');
+    $stmt = $pdo->prepare('SELECT User_ID FROM tbl_user WHERE Badge_Number = ? LIMIT 1');
     $stmt->execute([$normalized]);
     $id = $stmt->fetchColumn();
 
@@ -187,12 +192,12 @@ function previewBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
     if (!$examineeRoleId) {
         return [
             'success' => false,
-            'message' => 'Examinee role not found',
+            'message' => 'Trainee role not found',
         ];
     }
 
-    $seenAcademic = [];
-    $reservedAcademic = [];
+    $seenBadge = [];
+    $reservedBadge = [];
     $previewRows = [];
 
     foreach ($rows as $index => $rawRow) {
@@ -208,32 +213,22 @@ function previewBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
         $status = 'ready';
         $existingUserId = null;
 
-        $fullnameError = validateBulkExamineeFullname($normalized['fullname']);
-        if ($fullnameError !== null) {
-            $errors[] = $fullnameError;
+        $nameError = validateBulkExamineeName($normalized);
+        if ($nameError !== null) {
+            $errors[] = $nameError;
         }
 
-        if ($normalized['academic_number'] === null && empty($errors)) {
-            $resolvedAcademic = resolveExamineeAcademicNumber($pdo, null, $reservedAcademic);
-            if ($resolvedAcademic['error'] !== null) {
-                $errors[] = $resolvedAcademic['error'];
-            } else {
-                $normalized['academic_number'] = $resolvedAcademic['number'];
-                $warnings[] = 'Auto-assigned academic number';
-            }
-        } else {
-            $academicError = validateAcademicNumberFormat($normalized['academic_number']);
-            if ($academicError !== null) {
-                $errors[] = $academicError;
-            }
+        $badgeError = validateBadgeNumberFormat($normalized['badge_number']);
+        if ($badgeError !== null) {
+            $errors[] = $badgeError;
         }
 
-        if ($normalized['academic_number'] !== null && empty($errors)) {
-            $academicKey = $normalized['academic_number'];
-            if (isset($seenAcademic[$academicKey])) {
-                $errors[] = 'Duplicate academic number in file (row ' . $seenAcademic[$academicKey] . ')';
+        if ($normalized['badge_number'] !== null && empty($errors)) {
+            $badgeKey = $normalized['badge_number'];
+            if (isset($seenBadge[$badgeKey])) {
+                $errors[] = 'Duplicate badge number in file (row ' . $seenBadge[$badgeKey] . ')';
             } else {
-                $seenAcademic[$academicKey] = $rowNumber;
+                $seenBadge[$badgeKey] = $rowNumber;
             }
         }
 
@@ -246,8 +241,8 @@ function previewBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
             $errors[] = $rankError;
         }
 
-        if (empty($errors) && $normalized['academic_number'] !== null) {
-            $existingUserId = findUserIdByAcademicNumber($pdo, $normalized['academic_number']);
+        if (empty($errors) && $normalized['badge_number'] !== null) {
+            $existingUserId = findUserIdByBadgeNumber($pdo, $normalized['badge_number']);
             if ($existingUserId) {
                 $roleStmt = $pdo->prepare('
                     SELECT r.Role_Name
@@ -260,10 +255,10 @@ function previewBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
                 $existingRole = (string)($roleStmt->fetchColumn() ?: '');
 
                 if ($existingRole !== 'Examinee') {
-                    $errors[] = 'Academic number belongs to a non-examinee account';
+                    $errors[] = 'Badge number belongs to a non-trainee account';
                 } else {
                     $action = 'assign_only';
-                    $warnings[] = 'This student is already in the system; will assign to section only';
+                    $warnings[] = 'This trainee is already in the system; will assign to section only';
                     if ($normalized['personnel_rank'] !== null) {
                         $warnings[] = 'Personnel rank will be updated';
                     }
@@ -282,7 +277,7 @@ function previewBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
         if (empty($errors) && $existingUserId && userAssignedToSection($pdo, $existingUserId, $sectionId)) {
             $action = 'skip';
             $status = 'skip';
-            $warnings[] = 'Already enrolled in this section — will skip';
+            $warnings[] = 'Already assigned to this section — will skip';
         } elseif (empty($errors) && $existingUserId) {
             $activeEnrollment = getExamineeActiveEnrollment($pdo, $existingUserId);
             if ($activeEnrollment !== null) {
@@ -298,14 +293,17 @@ function previewBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
             $action = 'none';
         }
 
-        if (empty($errors) && $action === 'create_and_assign' && $normalized['academic_number'] !== null) {
-            $reservedAcademic[] = $normalized['academic_number'];
+        if (empty($errors) && $action === 'create_and_assign' && $normalized['badge_number'] !== null) {
+            $reservedBadge[] = $normalized['badge_number'];
         }
 
         $previewRows[] = [
             'row' => $rowNumber,
+            'firstname' => $normalized['firstname'],
+            'middlename' => $normalized['middlename'],
+            'lastname' => $normalized['lastname'],
             'fullname' => $normalized['fullname'],
-            'academic_number' => $normalized['academic_number'],
+            'badge_number' => $normalized['badge_number'],
             'email' => $normalized['email'],
             'personnel_rank' => $normalized['personnel_rank'],
             'existing_user_id' => $existingUserId,
@@ -367,24 +365,26 @@ function previewBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
 
 function createExamineeFromImportRow(PDO $pdo, array $row, int $examineeRoleId): array
 {
-    $fullname = trim((string)$row['fullname']);
-    $academicNumber = normalizeAcademicNumber($row['academic_number'] ?? null);
-    $email = resolveStoredEmail('Examinee', $row['email'] ?? '', $academicNumber);
+    $firstname = trim((string)($row['firstname'] ?? ''));
+    $lastname = trim((string)($row['lastname'] ?? ''));
+    $middlename = normalizeMiddleName($row['middlename'] ?? '');
+    $badgeNumber = normalizeBadgeNumber($row['badge_number'] ?? null);
+    $email = resolveStoredEmail('Examinee', $row['email'] ?? '', $badgeNumber);
     $personnelRank = !empty($row['personnel_rank']) ? $row['personnel_rank'] : null;
     $passwordHash = password_hash(DEFAULT_EXAMINEE_PASSWORD, PASSWORD_BCRYPT);
     $hasRank = personnelRankColumnExists($pdo);
 
     if ($hasRank) {
-        $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Password_Hash, Must_Change_Password, Academic_Number, Personnel_Rank, Date_Created, Status) VALUES (?, ?, ?, ?, 1, ?, ?, NOW(), ?)');
-        $stmt->execute([$examineeRoleId, $fullname, $email, $passwordHash, $academicNumber, $personnelRank, 'Active']);
+        $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Firstname, Middlename, Lastname, Email, Password_Hash, Must_Change_Password, Badge_Number, Personnel_Rank, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NOW(), ?)');
+        $stmt->execute([$examineeRoleId, $firstname, $middlename, $lastname, $email, $passwordHash, $badgeNumber, $personnelRank, 'Active']);
     } else {
-        $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Fullname, Email, Password_Hash, Must_Change_Password, Academic_Number, Date_Created, Status) VALUES (?, ?, ?, ?, 1, ?, NOW(), ?)');
-        $stmt->execute([$examineeRoleId, $fullname, $email, $passwordHash, $academicNumber, 'Active']);
+        $stmt = $pdo->prepare('INSERT INTO tbl_user (Role_ID, Firstname, Middlename, Lastname, Email, Password_Hash, Must_Change_Password, Badge_Number, Date_Created, Status) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NOW(), ?)');
+        $stmt->execute([$examineeRoleId, $firstname, $middlename, $lastname, $email, $passwordHash, $badgeNumber, 'Active']);
     }
 
     return [
         'user_id' => (int)$pdo->lastInsertId(),
-        'fullname' => $fullname,
+        'fullname' => formatPersonName($firstname, $middlename, $lastname),
     ];
 }
 
@@ -405,10 +405,18 @@ function assignImportUserToSection(PDO $pdo, int $userId, int $enrollmentBatchId
         throw new RuntimeException($singleEnrollmentError);
     }
 
-    $existing = $pdo->prepare('SELECT User_Batch_ID FROM tbl_user_batch WHERE User_ID = ? AND Batch_ID = ?');
+    $existing = $pdo->prepare('SELECT User_Batch_ID, Status FROM tbl_user_batch WHERE User_ID = ? AND Batch_ID = ? LIMIT 1');
     $existing->execute([$userId, $enrollmentBatchId]);
-    if ($existing->fetch()) {
-        return false;
+    $row = $existing->fetch(PDO::FETCH_ASSOC);
+
+    if ($row) {
+        if (($row['Status'] ?? '') === 'Active') {
+            return false;
+        }
+
+        $upd = $pdo->prepare('UPDATE tbl_user_batch SET Status = ?, Date_Enrolled = NOW() WHERE User_Batch_ID = ?');
+        $upd->execute(['Active', (int)$row['User_Batch_ID']]);
+        return true;
     }
 
     $stmt = $pdo->prepare('INSERT INTO tbl_user_batch (User_ID, Batch_ID, Status, Date_Enrolled) VALUES (?, ?, ?, NOW())');
@@ -485,12 +493,20 @@ function commitBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
                     $batchLabel = auditBatchLabel($pdo, $enrollmentBatchId);
                     auditFromSession($pdo, 'BATCH', 'ASSIGN_USER_BATCH', "{$userLabel} assigned to batch {$batchLabel} (bulk import)", 'SUCCESS', 'batch', $enrollmentBatchId);
                 }
-            } catch (Throwable $e) {
+            } catch (RuntimeException $e) {
                 $failed++;
                 $errors[] = [
                     'row' => $row['row'],
-                    'academic_number' => $row['academic_number'],
+                    'badge_number' => $row['badge_number'],
                     'message' => $e->getMessage(),
+                ];
+            } catch (Throwable $e) {
+                error_log('Bulk import row error: ' . $e->getMessage());
+                $failed++;
+                $errors[] = [
+                    'row' => $row['row'],
+                    'badge_number' => $row['badge_number'],
+                    'message' => 'An unexpected error occurred. Please try again later.',
                 ];
             }
         }
@@ -499,7 +515,7 @@ function commitBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
             $pdo->rollBack();
             return [
                 'success' => false,
-                'message' => $errors[0]['message'] ?? 'Import failed',
+                'message' => $errors[0]['message'] ?? 'An unexpected error occurred. Please try again later.',
                 'created' => 0,
                 'assigned' => 0,
                 'skipped' => $skipped,
@@ -514,9 +530,10 @@ function commitBulkExamineeImport(PDO $pdo, array $rows, int $sectionId): array
             $pdo->rollBack();
         }
 
+        error_log('Bulk import failed: ' . $e->getMessage());
         return [
             'success' => false,
-            'message' => 'Import failed: ' . $e->getMessage(),
+            'message' => 'An unexpected error occurred. Please try again later.',
         ];
     }
 

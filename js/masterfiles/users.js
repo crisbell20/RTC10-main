@@ -2,8 +2,8 @@ const API_BASE = '../../api/masterfiles/users.php';
 const BATCHES_API = '../../api/masterfiles/batches.php';
 const COURSES_API = '../../api/masterfiles/courses.php';
 const EXAMINEE_EMAIL_SUFFIX = '@rtc.examinee.local';
-const ACADEMIC_NUMBER_PATTERN = /^[A-Z][0-9]{3}$/;
-const ACADEMIC_NUMBER_FORMAT_MESSAGE = 'Academic number must be one letter followed by 3 numbers (e.g. A001)';
+const BADGE_NUMBER_PATTERN = /^[0-9]{6,}$/;
+const BADGE_NUMBER_FORMAT_MESSAGE = 'Badge number must be at least 6 digits';
 let addUserModal = new bootstrap.Modal(document.getElementById('addUserModal'));
 let bulkImportModal = null;
 let assignBatchModal = null;
@@ -27,7 +27,7 @@ function initAdminPasswordPolicyValidation() {
 }
 
 function formatEmailForDisplay(email) {
-    if (!email || String(email).toLowerCase().endsWith(EXAMINEE_EMAIL_SUFFIX)) {
+    if (!email || String(email).trim().toLowerCase().endsWith(EXAMINEE_EMAIL_SUFFIX)) {
         return '<small class="text-muted">—</small>';
     }
     return escapeHtml(email);
@@ -43,15 +43,15 @@ function getSelectedRoleName() {
 function updateUserFormByRole(roleName) {
     const isExaminee = roleName === 'Examinee';
     const emailInput = document.getElementById('email');
-    const academicInput = document.getElementById('academic_number');
+    const badgeInput = document.getElementById('badge_number');
     const emailRequiredMark = document.getElementById('emailRequiredMark');
-    const academicRequiredMark = document.getElementById('academicRequiredMark');
+    const badgeRequiredMark = document.getElementById('badgeRequiredMark');
     const editUserId = document.getElementById('editUserId')?.value;
     const enrollmentSection = document.getElementById('addUserEnrollmentSection');
     const sectionSelect = document.getElementById('addUserSectionSelect');
 
-    if (academicInput) {
-        academicInput.required = isExaminee && !!editUserId;
+    if (badgeInput) {
+        badgeInput.required = isExaminee;
     }
     if (emailInput) {
         emailInput.required = !isExaminee;
@@ -59,8 +59,8 @@ function updateUserFormByRole(roleName) {
     if (emailRequiredMark) {
         emailRequiredMark.style.display = isExaminee ? 'none' : '';
     }
-    if (academicRequiredMark) {
-        academicRequiredMark.style.display = isExaminee ? '' : 'none';
+    if (badgeRequiredMark) {
+        badgeRequiredMark.style.display = isExaminee ? '' : 'none';
     }
 
     if (enrollmentSection) {
@@ -76,44 +76,21 @@ function updateUserFormByRole(roleName) {
         sectionSelect.required = isExaminee && !editUserId;
     }
 
-    if (isExaminee && !editUserId) {
-        loadNextAcademicNumber();
-    }
-
     const passwordInput = document.getElementById('password');
     if (passwordInput && !editUserId) {
         if (isExaminee) {
-            passwordInput.value = DEFAULT_EXAMINEE_PASSWORD;
+            passwordInput.value = '';
             passwordInput.readOnly = true;
+            passwordInput.required = false;
         } else {
             passwordInput.readOnly = false;
+            passwordInput.required = true;
             passwordInput.value = '';
         }
         refreshPasswordFieldValidation(passwordInput, adminPasswordPolicyChecklistEl);
     }
 }
 
-function loadNextAcademicNumber() {
-    const academicInput = document.getElementById('academic_number');
-    const editUserId = document.getElementById('editUserId')?.value;
-    if (!academicInput || editUserId || getSelectedRoleName() !== 'Examinee') {
-        return;
-    }
-
-    if (academicInput.value.trim() !== '') {
-        return;
-    }
-
-    axios.get(`${API_BASE}?action=next_academic_number`)
-        .then(response => {
-            if (response.data.success && response.data.data?.academic_number) {
-                academicInput.value = response.data.data.academic_number;
-            }
-        })
-        .catch(error => {
-            console.error('Error loading next academic number:', error);
-        });
-}
 
 // Load personnel rank options
 function loadPersonnelRanks() {
@@ -220,7 +197,7 @@ function renderUsersTable(users) {
         <tr>
             <td><strong>${escapeHtml(user.Fullname)}</strong></td>
             <td>${formatEmailForDisplay(user.Email)}</td>
-            <td>${user.Academic_Number ? escapeHtml(user.Academic_Number) : '<small class="text-muted">—</small>'}</td>
+            <td>${user.Badge_Number ? escapeHtml(user.Badge_Number) : '<small class="text-muted">—</small>'}</td>
             <td>${rankDisplay}</td>
             <td><span class="badge badge-info">${escapeHtml(user.Role_Name)}</span></td>
             <td>${batchInfo}</td>
@@ -229,9 +206,10 @@ function renderUsersTable(users) {
                     ${escapeHtml(user.Status)}
                 </span>
             </td>
+            <td>${new Date(user.Date_Created).toLocaleDateString()}</td>
             <td>
-                <div class="dropdown">
-                    <button class="btn btn-outline btn-sm" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                <div class="dropdown staff-action-menu">
+                    <button class="btn btn-sm btn-link text-secondary staff-action-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="More actions">
                         <i class="bi bi-three-dots-vertical"></i>
                     </button>
                     <ul class="dropdown-menu dropdown-menu-end">
@@ -257,7 +235,6 @@ function renderUsersTable(users) {
                     </ul>
                 </div>
             </td>
-            <td>${new Date(user.Date_Created).toLocaleDateString()}</td>
         </tr>
     `;
     }).join('');
@@ -280,18 +257,25 @@ function applyUserFilters() {
         filtered = filtered.filter(u =>
             (u.Fullname && u.Fullname.toLowerCase().includes(term)) ||
             (u.Email && u.Email.toLowerCase().includes(term)) ||
-            (u.Academic_Number && u.Academic_Number.toLowerCase().includes(term))
+            (u.Badge_Number && u.Badge_Number.toLowerCase().includes(term))
         );
     }
 
     renderUsersTable(filtered);
 }
 
+function bootstrapAlertClass(type) {
+    if (type === 'error' || type === 'danger') return 'danger';
+    if (type === 'warning') return 'warning';
+    if (type === 'info') return 'info';
+    return 'success';
+}
+
 // Show alert
 function showAlert(message, type = 'success') {
     const alertDiv = document.getElementById('messageAlert');
-    alertDiv.innerHTML = `<div class="alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show" role="alert">
-        ${message}
+    alertDiv.innerHTML = `<div class="alert alert-${bootstrapAlertClass(type)} alert-dismissible fade show" role="alert">
+        ${escapeHtml(message)}
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>`;
 }
@@ -305,8 +289,8 @@ function showAddUserAlert(message, type = 'error') {
     const alertDiv = document.getElementById('addUserMessageAlert');
     if (!alertDiv) return;
 
-    alertDiv.innerHTML = `<div class="alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show" role="alert">
-        ${message}
+    alertDiv.innerHTML = `<div class="alert alert-${bootstrapAlertClass(type)} alert-dismissible fade show" role="alert">
+        ${escapeHtml(message)}
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>`;
     alertDiv.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -325,82 +309,136 @@ function showFormAlert(message, type = 'success') {
     }
 }
 
-// Add user form submit
-document.getElementById('addUserForm').addEventListener('submit', function(e) {
-    e.preventDefault();
-    
-    // Get form values
-    const fullname = document.getElementById('fullname').value.trim();
+function namePartError(value, label, required) {
+    const namePattern = /^[\p{L}\s.,\-]+$/u;
+    if (!value) {
+        return required ? `${label} is required` : '';
+    }
+    if (!namePattern.test(value) || !/\p{L}/u.test(value)) {
+        return `${label} must contain only letters, spaces, dots, commas, and hyphens`;
+    }
+    if (required && value.length < 2) {
+        return `${label} must be at least 2 characters`;
+    }
+    if (value.length > 100) {
+        return `${label} must be at most 100 characters`;
+    }
+    return '';
+}
+
+function validateAddUserFieldErrors() {
+    const errors = {};
+    const firstname = document.getElementById('firstname').value.trim();
+    const lastname = document.getElementById('lastname').value.trim();
+    const middlename = document.getElementById('middlename').value.trim();
     const email = document.getElementById('email').value.trim();
-    const academicNumber = document.getElementById('academic_number').value.trim();
     const password = document.getElementById('password').value;
     const roleName = getSelectedRoleName();
     const isExaminee = roleName === 'Examinee';
     const editUserIdCheck = document.getElementById('editUserId').value;
-    
-    // Validate fullname - only letters, spaces, dots, hyphens, apostrophes
-    const namePattern = /^[a-zA-Z\s.\-']+$/;
-    if (!namePattern.test(fullname)) {
-        showFormAlert('Full name must contain only letters, spaces, dots, hyphens, and apostrophes', 'error');
-        document.getElementById('fullname').focus();
-        return;
-    }
-    
-    if (fullname.length < 2 || fullname.length > 100) {
-        showFormAlert('Full name must be between 2 and 100 characters', 'error');
-        document.getElementById('fullname').focus();
-        return;
-    }
-    
+
+    const firstNameError = namePartError(firstname, 'First name', true);
+    const lastNameError = namePartError(lastname, 'Last name', true);
+    const middleNameError = namePartError(middlename, 'Middle name', false);
+    if (firstNameError) errors.firstname = firstNameError;
+    if (lastNameError) errors.lastname = lastNameError;
+    if (middleNameError) errors.middlename = middleNameError;
+
     if (isExaminee) {
-        const normalizedAcademic = academicNumber.toUpperCase();
-        if (normalizedAcademic && !ACADEMIC_NUMBER_PATTERN.test(normalizedAcademic)) {
-            showFormAlert(ACADEMIC_NUMBER_FORMAT_MESSAGE, 'error');
-            document.getElementById('academic_number').focus();
-            return;
+        const badgeNumber = document.getElementById('badge_number').value.trim();
+        if (!badgeNumber) {
+            errors.badge_number = 'Badge number is required';
+        } else if (!BADGE_NUMBER_PATTERN.test(badgeNumber)) {
+            errors.badge_number = BADGE_NUMBER_FORMAT_MESSAGE;
         }
         if (email) {
             const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             if (!emailPattern.test(email)) {
-                showFormAlert('Please enter a valid email address', 'error');
-                document.getElementById('email').focus();
-                return;
+                errors.email = 'Please enter a valid email address';
             }
         }
-        if (!editUserIdCheck) {
-            const sectionId = document.getElementById('addUserSectionSelect')?.value;
-            if (!sectionId) {
-                showFormAlert('Please select a course, batch, and section for the examinee', 'error');
-                return;
-            }
+        if (!editUserIdCheck && !document.getElementById('addUserSectionSelect')?.value) {
+            errors.addUserEnrollmentSection = 'Please select a course, batch, and section for the trainee';
         }
     } else {
         const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailPattern.test(email)) {
-            showFormAlert('Please enter a valid email address', 'error');
-            document.getElementById('email').focus();
-            return;
+        if (!email) {
+            errors.email = 'Email is required';
+        } else if (!emailPattern.test(email)) {
+            errors.email = 'Please enter a valid email address';
         }
     }
 
-    // Validate password (only if required or has value)
+    if (!document.getElementById('role_id').value) {
+        errors.role_id = 'Role is required';
+    }
+
     if (!editUserIdCheck || (password && password !== '********')) {
-        const passwordError = validatePasswordPolicy(password);
-        if (passwordError) {
-            showFormAlert(passwordError, 'error');
-            document.getElementById('password').focus();
-            return;
+        const skipDefaultExamineePassword = !editUserIdCheck && isExaminee && !password;
+        if (!skipDefaultExamineePassword) {
+            const passwordError = validatePasswordPolicy(password);
+            if (passwordError) {
+                errors.password = passwordError;
+            }
         }
     }
+
+    return errors;
+}
+
+function validateAssignBatchFieldErrors() {
+    const errors = {};
+    if (!document.getElementById('assignCourseSelect')?.value) {
+        errors.assignCourseSelect = 'Please select a course';
+    }
+    if (!document.getElementById('assignParentBatchSelect')?.value) {
+        errors.assignParentBatchSelect = 'Please select a batch';
+    }
+    if (!document.getElementById('assignSectionSelect')?.value) {
+        errors.assignSectionSelect = 'Please select a section';
+    }
+    return errors;
+}
+
+// Add user form submit
+const addUserFormEl = document.getElementById('addUserForm');
+if (addUserFormEl) {
+ModalFormValidation.bindModalFieldErrorClear(addUserFormEl);
+addUserFormEl.addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    const form = e.target;
+    if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+    }
+
+    const fieldErrors = validateAddUserFieldErrors();
+    if (Object.keys(fieldErrors).length > 0) {
+        ModalFormValidation.applyModalFieldErrors(form, fieldErrors, { summaryAlertId: 'addUserMessageAlert' });
+        return;
+    }
+    ModalFormValidation.clearModalFieldErrors(form);
+    clearAddUserAlert();
+    
+    // Get form values
+    const email = document.getElementById('email').value.trim();
+    const badgeNumber = document.getElementById('badge_number').value.trim();
+    const password = document.getElementById('password').value;
+    const roleName = getSelectedRoleName();
+    const isExaminee = roleName === 'Examinee';
+    const editUserIdCheck = document.getElementById('editUserId').value;
     
     const formData = new FormData(this);
     const editUserId = formData.get('edit_user_id');
 
     // Common fields
     const payload = {
-        fullname: formData.get('fullname'),
+        firstname: formData.get('firstname'),
+        lastname: formData.get('lastname'),
+        middlename: formData.get('middlename'),
         email: formData.get('email'),
-        academic_number: isExaminee ? (academicNumber ? academicNumber.toUpperCase() : '') : '',
+        badge_number: isExaminee ? badgeNumber : '',
         personnel_rank: formData.get('personnel_rank'),
         role_id: formData.get('role_id')
     };
@@ -453,6 +491,7 @@ document.getElementById('addUserForm').addEventListener('submit', function(e) {
             });
     }
 });
+}
 
 function resetAddUserModal() {
     const form = document.getElementById('addUserForm');
@@ -605,6 +644,8 @@ document.getElementById('openAddUserModalBtn').addEventListener('click', resetAd
 document.getElementById('addUserModal').addEventListener('show.bs.modal', function() {
     loadRoles();
     loadPersonnelRanks();
+    ModalFormValidation.clearModalFieldErrors(document.getElementById('addUserForm'));
+    clearAddUserAlert();
 });
 
 document.getElementById('addUserModal').addEventListener('hidden.bs.modal', function() {
@@ -612,6 +653,7 @@ document.getElementById('addUserModal').addEventListener('hidden.bs.modal', func
     const userStatusSection = document.getElementById('userStatusSection');
     if (editIdInput) editIdInput.value = '';
     if (userStatusSection) userStatusSection.style.display = 'none';
+    ModalFormValidation.clearModalFieldErrors(document.getElementById('addUserForm'));
     clearAddUserAlert();
 });
 
@@ -660,9 +702,11 @@ function editUser(userId) {
     }
 
     const editIdInput = document.getElementById('editUserId');
-    const fullnameInput = document.getElementById('fullname');
+    const firstnameInput = document.getElementById('firstname');
+    const lastnameInput = document.getElementById('lastname');
+    const middlenameInput = document.getElementById('middlename');
     const emailInput = document.getElementById('email');
-    const academicInput = document.getElementById('academic_number');
+    const badgeInput = document.getElementById('badge_number');
     const roleSelect = document.getElementById('role_id');
     const passwordInput = document.getElementById('password');
     const passwordOptionalLabel = document.getElementById('passwordOptionalLabel');
@@ -673,14 +717,16 @@ function editUser(userId) {
     const userStatusSection = document.getElementById('userStatusSection');
 
     if (editIdInput) editIdInput.value = user.User_ID;
-    if (fullnameInput) fullnameInput.value = user.Fullname || '';
+    if (firstnameInput) firstnameInput.value = user.Firstname || '';
+    if (lastnameInput) lastnameInput.value = user.Lastname || '';
+    if (middlenameInput) middlenameInput.value = user.Middlename || '';
     if (emailInput) {
-        const displayEmail = user.Email && !String(user.Email).toLowerCase().endsWith(EXAMINEE_EMAIL_SUFFIX)
+        const displayEmail = user.Email && !String(user.Email).trim().toLowerCase().endsWith(EXAMINEE_EMAIL_SUFFIX)
             ? user.Email
             : '';
         emailInput.value = displayEmail;
     }
-    if (academicInput) academicInput.value = user.Academic_Number || '';
+    if (badgeInput) badgeInput.value = user.Badge_Number || '';
     populatePersonnelRankSelect(user.Personnel_Rank || '');
 
     // Select the correct role once roles are loaded
@@ -689,7 +735,7 @@ function editUser(userId) {
     setTimeout(() => {
         if (roleSelect) {
             for (let i = 0; i < roleSelect.options.length; i++) {
-                if (roleSelect.options[i].text.trim() === user.Role_Name) {
+                if (roleSelect.options[i].dataset.roleName === user.Role_Name) {
                     roleSelect.selectedIndex = i;
                     updateUserFormByRole(user.Role_Name);
                     break;
@@ -851,7 +897,7 @@ function assignToBatch(userId) {
                 const label = enrollments.map(b =>
                     `${b.Course_Name} → ${b.Section_Name || '—'} → ${b.Batch_Name}`
                 ).join('; ');
-                warningEl.textContent = `This examinee is already assigned to ${label}. Remove them from that assignment before assigning elsewhere.`;
+                warningEl.textContent = `This trainee is already assigned to ${label}. Remove them from that assignment before assigning elsewhere.`;
                 warningEl.classList.remove('d-none');
             }
 
@@ -872,8 +918,20 @@ document.getElementById('assignParentBatchSelect').addEventListener('change', fu
 });
 
 // Assign form handler
-document.getElementById('assignBatchForm').addEventListener('submit', function(e) {
+const assignBatchFormEl = document.getElementById('assignBatchForm');
+if (assignBatchFormEl) {
+ModalFormValidation.bindModalFieldErrorClear(assignBatchFormEl);
+assignBatchFormEl.addEventListener('submit', function(e) {
     e.preventDefault();
+    const form = e.target;
+    const fieldErrors = validateAssignBatchFieldErrors();
+    if (Object.keys(fieldErrors).length > 0) {
+        ModalFormValidation.applyModalFieldErrors(form, fieldErrors, { summaryAlertId: 'assignBatchFormAlert' });
+        return;
+    }
+    ModalFormValidation.clearModalFieldErrors(form);
+    ModalFormValidation.setSummaryAlert('assignBatchFormAlert', '');
+
     const formData = new FormData(this);
     const userId = formData.get('user_id');
     const sectionId = formData.get('section_id');
@@ -893,7 +951,7 @@ document.getElementById('assignBatchForm').addEventListener('submit', function(e
     axios.post(BATCHES_API, data)
         .then(response => {
             if (response.data.success) {
-                showAlert('Examinee assigned successfully', 'success');
+                showAlert('Trainee assigned successfully', 'success');
                 this.reset();
                 if (assignBatchModal) {
                     assignBatchModal.hide();
@@ -904,8 +962,14 @@ document.getElementById('assignBatchForm').addEventListener('submit', function(e
             }
         })
         .catch(error => {
-            showAlert(error.response?.data?.message || 'Error assigning examinee', 'error');
+            showAlert(error.response?.data?.message || 'Error assigning trainee', 'error');
         });
+});
+}
+
+document.getElementById('assignBatchModal')?.addEventListener('show.bs.modal', () => {
+    ModalFormValidation.clearModalFieldErrors(assignBatchFormEl);
+    ModalFormValidation.setSummaryAlert('assignBatchFormAlert', '');
 });
 
 // Escape HTML to prevent XSS
@@ -929,8 +993,19 @@ function mapImportRow(rawRow, rowNumber) {
         const value = rawRow[key];
         if (normalizedKey === 'full_name' || normalizedKey === 'fullname' || normalizedKey === 'name') {
             mapped.Fullname = value;
-        } else if (normalizedKey === 'academic_number' || normalizedKey === 'academic_no') {
-            mapped.Academic_Number = value;
+        } else if (normalizedKey === 'first_name' || normalizedKey === 'firstname') {
+            mapped.Firstname = value;
+        } else if (normalizedKey === 'last_name' || normalizedKey === 'lastname') {
+            mapped.Lastname = value;
+        } else if (normalizedKey === 'middle_name' || normalizedKey === 'middlename' || normalizedKey === 'middle') {
+            mapped.Middlename = value;
+        } else if (
+            normalizedKey === 'badge_number'
+            || normalizedKey === 'badge_no'
+            || normalizedKey === 'academic_number'
+            || normalizedKey === 'academic_no'
+        ) {
+            mapped.Badge_Number = value;
         } else if (normalizedKey === 'personnel_rank' || normalizedKey === 'rank') {
             mapped.Personnel_Rank = String(value || '').trim().toUpperCase();
         } else if (normalizedKey === 'email') {
@@ -953,9 +1028,10 @@ function parseImportFile(file) {
                 const rows = jsonRows
                     .map((row, index) => mapImportRow(row, index + 2))
                     .filter(row => {
-                        const hasName = String(row.Fullname || '').trim() !== '';
-                        const hasAcademic = String(row.Academic_Number || '').trim() !== '';
-                        return hasName || hasAcademic;
+                        const hasName = [row.Fullname, row.Firstname, row.Lastname, row.Middlename]
+                            .some(value => String(value || '').trim() !== '');
+                        const hasBadge = String(row.Badge_Number || '').trim() !== '';
+                        return hasName || hasBadge;
                     });
                 resolve(rows);
             } catch (err) {
@@ -1088,7 +1164,7 @@ function renderImportPreview(data) {
             <tr>
                 <td>${row.row}</td>
                 <td>${escapeHtml(row.fullname || '')}</td>
-                <td>${escapeHtml(row.academic_number || '')}</td>
+                <td>${escapeHtml(row.badge_number || '')}</td>
                 <td>${escapeHtml(row.personnel_rank || '—')}</td>
                 <td class="${statusClass} fw-semibold">${escapeHtml(row.status)}</td>
                 <td><small>${escapeHtml(notes)}</small></td>
@@ -1167,7 +1243,7 @@ function commitBulkImport() {
     }
 
     Swal.fire({
-        title: 'Import Examinees?',
+        title: 'Import Trainees?',
         html: 'Valid rows will create new accounts (default password) and assign them to the selected section.',
         icon: 'question',
         showCancelButton: true,
@@ -1201,7 +1277,7 @@ function commitBulkImport() {
             })
             .finally(() => {
                 commitBtn.disabled = false;
-                commitBtn.innerHTML = '<i class="bi bi-upload me-2"></i>Import Examinees';
+                commitBtn.innerHTML = '<i class="bi bi-upload me-2"></i>Import Trainees';
             });
     });
 }
@@ -1209,12 +1285,12 @@ function commitBulkImport() {
 function downloadImportTemplate() {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([
-        ['Fullname', 'Academic_Number', 'Rank', 'Email'],
-        ['Juan Dela Cruz', '', 'PAT', 'juan@example.com'],
-        ['Maria Santos', 'A010', 'PCPL', 'maria@example.com']
+        ['Lastname', 'Firstname', 'Middlename', 'Badge_Number', 'Rank', 'Email'],
+        ['Dela Cruz', 'Juan', '', '123456', 'PAT', 'juan@example.com'],
+        ['Santos', 'Maria', 'Reyes', '123457', 'PCPL', 'maria@example.com']
     ]);
-    XLSX.utils.book_append_sheet(wb, ws, 'Examinees');
-    XLSX.writeFile(wb, 'examinee_import_template.xlsx');
+    XLSX.utils.book_append_sheet(wb, ws, 'Trainees');
+    XLSX.writeFile(wb, 'trainee_import_template.xlsx');
 }
 
 function openBulkImportModal() {
@@ -1308,20 +1384,38 @@ document.getElementById('importFile')?.addEventListener('change', function() {
 });
 document.getElementById('bulkImportModal')?.addEventListener('hidden.bs.modal', resetImportModal);
 
-// Real-time validation for fullname
-document.getElementById('fullname').addEventListener('input', function() {
-    const value = this.value;
-    const pattern = /^[a-zA-Z\s.\-']+$/;
-    
+function bindNamePartValidation(inputId, label, required) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    input.addEventListener('input', function() {
+        const message = namePartError(this.value.trim(), label, required);
+        if (!this.value.trim()) {
+            this.setCustomValidity('');
+            this.classList.remove('is-invalid', 'is-valid');
+        } else if (message) {
+            this.setCustomValidity(message);
+            this.classList.add('is-invalid');
+            this.classList.remove('is-valid');
+        } else {
+            this.setCustomValidity('');
+            this.classList.remove('is-invalid');
+            this.classList.add('is-valid');
+        }
+    });
+}
+
+bindNamePartValidation('firstname', 'First name', true);
+bindNamePartValidation('lastname', 'Last name', true);
+bindNamePartValidation('middlename', 'Middle name', false);
+
+document.getElementById('badge_number')?.addEventListener('input', function() {
+    const value = this.value.trim();
+
     if (value.length === 0) {
         this.setCustomValidity('');
         this.classList.remove('is-invalid', 'is-valid');
-    } else if (!pattern.test(value)) {
-        this.setCustomValidity('Full name must contain only letters, spaces, dots, hyphens, and apostrophes');
-        this.classList.add('is-invalid');
-        this.classList.remove('is-valid');
-    } else if (value.length < 2 || value.length > 100) {
-        this.setCustomValidity('Full name must be between 2 and 100 characters');
+    } else if (!BADGE_NUMBER_PATTERN.test(value)) {
+        this.setCustomValidity(BADGE_NUMBER_FORMAT_MESSAGE);
         this.classList.add('is-invalid');
         this.classList.remove('is-valid');
     } else {

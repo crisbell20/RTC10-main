@@ -61,26 +61,9 @@ Expected output:
 
 ---
 
-## Required Migrations
+## Schema notes
 
-Run these once in phpMyAdmin or via PHP CLI:
-
-1. **Exam archive columns** (if not done):
-   ```bash
-   php scripts/migrations/run_exam_code_migration.php
-   ```
-
-2. **Curriculum archive columns** (courses, modules, subjects, batches, sections):
-   ```bash
-   php scripts/migrations/run_curriculum_archive_migration.php
-   ```
-
-3. **User & question archive columns**:
-   ```bash
-   php scripts/migrations/run_user_question_archive_migration.php
-   ```
-
-Or import the SQL files from `scripts/migrations/` in phpMyAdmin.
+Archive, exam-code, and related columns are part of the current database. Remaining files in `scripts/migrations/` are **SQL reference only** — import in phpMyAdmin or the MySQL CLI if an older database is missing a column. Do not expose or execute them over HTTP.
 
 ---
 

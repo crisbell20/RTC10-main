@@ -1,7 +1,5 @@
 <?php
-/**
- * Exam type helpers — PRE_TEST, MODULAR, COMPREHENSIVE, POST_TEST.
- */
+// Exam type helpers
 
 const EXAM_TYPES = ['PRE_TEST', 'MODULAR', 'COMPREHENSIVE', 'POST_TEST'];
 
@@ -25,9 +23,6 @@ function examTypeColumnExists(PDO $pdo): bool
     return $exists;
 }
 
-/**
- * Human-readable labels for UI dropdowns.
- */
 function examTypeLabels(): array
 {
     return [
@@ -38,18 +33,12 @@ function examTypeLabels(): array
     ];
 }
 
-/**
- * Label for a stored exam type value.
- */
 function examTypeLabel(string $examType): string
 {
     $labels = examTypeLabels();
     return $labels[$examType] ?? $examType;
 }
 
-/**
- * Normalize API/form input to a valid exam type constant.
- */
 function normalizeExamTypeInput(?string $value): ?string
 {
     if ($value === null || $value === '') {
@@ -68,9 +57,7 @@ function normalizeExamTypeInput(?string $value): ?string
     return in_array($value, EXAM_TYPES, true) ? $value : null;
 }
 
-/**
- * Infer exam type from legacy Title text (migration / backward compatibility).
- */
+
 function inferExamTypeFromTitle(?string $title): string
 {
     $title = trim((string)$title);
@@ -95,9 +82,6 @@ function inferExamTypeFromTitle(?string $title): string
     return 'MODULAR';
 }
 
-/**
- * Validate exam type for create/update; returns error message or null.
- */
 function validateExamTypeValue(?string $examType): ?string
 {
     if ($examType === null || $examType === '') {
@@ -111,9 +95,7 @@ function validateExamTypeValue(?string $examType): ?string
     return null;
 }
 
-/**
- * Resolve exam type filter from request (empty = all types).
- */
+
 function resolveExamTypeFilter(array $get): ?string
 {
     return null;

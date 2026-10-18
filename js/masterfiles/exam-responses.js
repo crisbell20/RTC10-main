@@ -1,5 +1,6 @@
 const API = '../../api/masterfiles/exam-responses.php';
 const EXAM_ID = window.EXAM_RESPONSES_EXAM_ID;
+const CAN_GRANT_RETAKE = window.EXAM_RESPONSES_CAN_RETAKE === true;
 
 let summaryData = null;
 let rankingsData = [];
@@ -9,6 +10,10 @@ let itemAnalysisLoaded = false;
 let itemAnalysisFilterBound = false;
 let detailModal = null;
 let searchTimer = null;
+let assignmentFiltersEnabled = false;
+let assignmentFilterState = null;
+let activeResponseTab = 'rankings';
+let retakeInFlight = false;
 
 document.addEventListener('DOMContentLoaded', () => {
     detailModal = new bootstrap.Modal(document.getElementById('detailModal'));
@@ -40,37 +45,25 @@ function bindItemAnalysisFilters() {
             renderItemAnalysisList(getFilteredItemAnalysisItems());
         }
     });
-
-    document.getElementById('itemAnalysisFilter')?.addEventListener('change', () => {
-        if (itemAnalysisData) {
-            renderItemAnalysisList(getFilteredItemAnalysisItems());
-        }
-    });
 }
 
 async function loadPage() {
     try {
-        const [summaryRes, rankingsRes, notSubmittedRes] = await Promise.all([
-            axios.get(`${API}?action=summary&exam_id=${EXAM_ID}`),
-            axios.get(`${API}?action=rankings&exam_id=${EXAM_ID}`),
-            axios.get(`${API}?action=not_submitted&exam_id=${EXAM_ID}`)
-        ]);
+        const summaryRes = await axios.get(`${API}?action=summary&exam_id=${EXAM_ID}`);
 
         if (!summaryRes.data.success) {
             throw new Error(summaryRes.data.message || 'Failed to load summary');
         }
 
         summaryData = summaryRes.data.data;
-        rankingsData = rankingsRes.data.success ? (rankingsRes.data.data || []) : [];
-        notSubmittedData = notSubmittedRes.data.success ? (notSubmittedRes.data.data || []) : [];
-
         renderSummary(summaryData);
-        renderRankings(rankingsData);
-        renderNotSubmitted(notSubmittedData);
+        setupAssignmentFilters(summaryData.exam?.Assignments || []);
+
+        await loadAssignmentFilteredData();
 
         document.getElementById('loadingBlock').style.display = 'none';
         document.getElementById('contentBlock').style.display = 'block';
-        document.getElementById('exportCsvBtn').disabled = rankingsData.length === 0;
+        updateExportButtonVisibility();
     } catch (err) {
         document.getElementById('loadingBlock').innerHTML = `
             <div class="alert alert-danger d-inline-block">
@@ -80,20 +73,197 @@ async function loadPage() {
     }
 }
 
-async function loadRankings() {
-    const status = document.getElementById('statusFilter')?.value || 'all';
-    const search = document.getElementById('searchInput')?.value.trim() || '';
+async function loadAssignmentFilteredData() {
+    const filterQuery = getAssignmentFilterQuery();
 
     try {
-        const res = await axios.get(`${API}?action=rankings&exam_id=${EXAM_ID}&status=${status}&search=${encodeURIComponent(search)}`);
+        const [rankingsRes, notSubmittedRes] = await Promise.all([
+            axios.get(`${API}?action=rankings&exam_id=${EXAM_ID}${buildRankingsQuery(filterQuery)}`),
+            axios.get(`${API}?action=not_submitted&exam_id=${EXAM_ID}${filterQuery}`)
+        ]);
+
+        if (rankingsRes.data.success) {
+            rankingsData = rankingsRes.data.data || [];
+            renderRankings(rankingsData);
+            updateExportButtonVisibility();
+        }
+
+        if (notSubmittedRes.data.success) {
+            notSubmittedData = notSubmittedRes.data.data || [];
+            renderNotSubmitted(notSubmittedData);
+            document.getElementById('notSubmittedCount').textContent = notSubmittedData.length;
+        }
+    } catch (err) {
+        Swal.fire('Error', err.response?.data?.message || 'Failed to load responses', 'error');
+    }
+}
+
+function buildRankingsQuery(filterQuery) {
+    const status = document.getElementById('statusFilter')?.value || 'all';
+    const search = document.getElementById('searchInput')?.value.trim() || '';
+    let query = filterQuery;
+
+    query += `&status=${encodeURIComponent(status)}`;
+    if (search) {
+        query += `&search=${encodeURIComponent(search)}`;
+    }
+
+    return query;
+}
+
+function getAssignmentFilterQuery() {
+    return '';
+}
+
+async function loadRankings() {
+    const filterQuery = getAssignmentFilterQuery();
+
+    try {
+        const res = await axios.get(`${API}?action=rankings&exam_id=${EXAM_ID}${buildRankingsQuery(filterQuery)}`);
         if (res.data.success) {
             rankingsData = res.data.data || [];
             renderRankings(rankingsData);
-            document.getElementById('exportCsvBtn').disabled = rankingsData.length === 0;
+            updateExportButtonVisibility();
         }
     } catch (err) {
         Swal.fire('Error', err.response?.data?.message || 'Failed to load rankings', 'error');
     }
+}
+
+function buildAssignmentFilterState(assignments) {
+    const batches = new Map();
+    const sectionsByBatch = new Map();
+    const allSections = new Map();
+
+    (assignments || []).forEach((assignment) => {
+        const batchId = assignment.parent_batch_id || assignment.batch_id;
+        const batchName = assignment.batch_name || 'Batch';
+        if (batchId) {
+            batches.set(String(batchId), batchName);
+        }
+
+        const sectionId = assignment.section_id;
+        const sectionName = assignment.section_name;
+        if (!batchId || !(sectionId > 0) || !sectionName) {
+            return;
+        }
+
+        const batchKey = String(batchId);
+        if (!sectionsByBatch.has(batchKey)) {
+            sectionsByBatch.set(batchKey, new Map());
+        }
+        sectionsByBatch.get(batchKey).set(String(sectionId), sectionName);
+        allSections.set(String(sectionId), sectionName);
+    });
+
+    const toSortedList = (map) => [...map.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+        batches: toSortedList(batches),
+        sectionsByBatch,
+        allSections: toSortedList(allSections),
+        showBatch: batches.size > 1,
+        showSection: allSections.size > 0
+    };
+}
+
+function getSectionsForSelectedBatch(batchId) {
+    if (!assignmentFilterState) {
+        return [];
+    }
+
+    if (!batchId) {
+        return assignmentFilterState.allSections;
+    }
+
+    const sections = assignmentFilterState.sectionsByBatch.get(String(batchId));
+    if (!sections) {
+        return [];
+    }
+
+    return [...sections.entries()]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function populateSectionFilter(sections, preserveSelection) {
+    const sectionFilter = document.getElementById('sectionFilter');
+    if (!sectionFilter) {
+        return;
+    }
+
+    const previousValue = preserveSelection ? sectionFilter.value : '';
+    sectionFilter.innerHTML = '<option value="">All sections</option>' + sections
+        .map(({ id, name }) => `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`)
+        .join('');
+
+    const validIds = new Set(sections.map((section) => section.id));
+    sectionFilter.value = previousValue && validIds.has(previousValue) ? previousValue : '';
+    sectionFilter.style.display = sections.length > 0 ? '' : 'none';
+}
+
+function updateExportButtonVisibility() {
+    const exportBtn = document.getElementById('exportCsvBtn');
+    if (!exportBtn) {
+        return;
+    }
+
+    const onRankings = activeResponseTab === 'rankings';
+    exportBtn.style.display = onRankings ? '' : 'none';
+    exportBtn.disabled = !onRankings || rankingsData.length === 0;
+}
+
+function updateResponseFiltersVisibility() {
+    const wrapper = document.getElementById('responseFilters');
+    if (!wrapper) {
+        return;
+    }
+
+    const onRankings = activeResponseTab === 'rankings';
+    wrapper.style.display = onRankings ? 'flex' : 'none';
+
+    wrapper.querySelectorAll('.rankings-only-filter').forEach((element) => {
+        element.style.display = onRankings ? '' : 'none';
+    });
+
+    updateAssignmentFilterDropdownVisibility();
+}
+
+function updateAssignmentFilterDropdownVisibility() {
+    const batchFilter = document.getElementById('batchFilter');
+    const sectionFilter = document.getElementById('sectionFilter');
+    if (!batchFilter || !sectionFilter || !assignmentFilterState) {
+        return;
+    }
+
+    batchFilter.style.display = assignmentFilterState.showBatch ? '' : 'none';
+
+    if (!assignmentFilterState.showSection) {
+        sectionFilter.style.display = 'none';
+        return;
+    }
+
+    const batchId = batchFilter.style.display !== 'none' ? (batchFilter.value || '') : '';
+    const sections = getSectionsForSelectedBatch(batchId);
+    sectionFilter.style.display = sections.length > 0 ? '' : 'none';
+}
+
+function handleBatchFilterChange() {
+    const batchFilter = document.getElementById('batchFilter');
+    const batchId = batchFilter?.value || '';
+    const sections = getSectionsForSelectedBatch(batchId);
+
+    populateSectionFilter(sections, false);
+    updateResponseFiltersVisibility();
+    loadAssignmentFilteredData();
+}
+
+function setupAssignmentFilters(assignments) {
+    assignmentFiltersEnabled = false;
+    assignmentFilterState = null;
+    updateResponseFiltersVisibility();
 }
 
 function renderExamAssignmentBadges(assignments) {
@@ -134,7 +304,7 @@ function renderSummary(data) {
         <div class="col-6 col-md-3">
             <div class="stat-chip">
                 <h4>${data.avg_grade || 0}%</h4>
-                <p>Average Grade</p>
+                <p>Overall Average</p>
             </div>
         </div>
         <div class="col-6 col-md-3">
@@ -155,6 +325,8 @@ function renderSummary(data) {
 function renderRankings(rows) {
     const tbody = document.getElementById('rankingsBody');
     const empty = document.getElementById('rankingsEmpty');
+    const exam = summaryData?.exam || {};
+    const retakeOpen = exam.Status === 'Published' && Number(exam.Is_Archived || 0) !== 1;
 
     if (!rows.length) {
         tbody.innerHTML = '';
@@ -164,6 +336,9 @@ function renderRankings(rows) {
 
     empty.style.display = 'none';
     tbody.innerHTML = rows.map(row => {
+        const attemptCount = Number(row.attempt_count || 1);
+        const retakeGranted = Number(row.Retake_Granted || 0) === 1;
+        const retakeUsed = attemptCount >= 2 || Number(row.Is_Retake || 0) === 1;
         const standing = row.standing ?? row.rank;
         const standingHtml = renderStandingBadge(standing);
         const remarksBadge = row.remarks === 'Passed' || row.status === 'Passed'
@@ -175,7 +350,7 @@ function renderRankings(rows) {
                 <td>${escapeHtml(row.Personnel_Rank || '—')}</td>
                 <td>
                     <div class="fw-medium">${escapeHtml(row.Fullname)}</div>
-                    <small class="text-muted">${escapeHtml(row.Academic_Number || '')}</small>
+                    <small class="text-muted">${escapeHtml(row.Badge_Number || '')}</small>
                 </td>
                 <td><small>${escapeHtml(row.batch_names || '—')}</small></td>
                 <td><small>${escapeHtml(row.section_names || '—')}</small></td>
@@ -186,9 +361,17 @@ function renderRankings(rows) {
                 <td><small>${escapeHtml(row.time_taken || 'N/A')}</small></td>
                 <td><small>${formatDateTime(row.Submission_Date)}</small></td>
                 <td>
-                    <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewDetail(${row.Result_ID})">
-                        View
-                    </button>
+                    <div class="d-grid gap-1">
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewDetail(${row.Result_ID})">
+                            View
+                        </button>
+                        ${CAN_GRANT_RETAKE ? `
+                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="grantRetake(${row.Result_ID})"
+                            ${retakeOpen && !retakeGranted && !retakeUsed ? '' : 'disabled'}
+                            title="${escapeHtml(!retakeOpen ? 'Retake is available only while the exam is open' : (retakeUsed ? 'This trainee has already used their one retake' : (retakeGranted ? 'A retake is already authorized' : 'Let this trainee take the exam again')))}">
+                            Retake
+                        </button>` : ''}
+                    </div>
                 </td>
             </tr>
         `;
@@ -208,8 +391,11 @@ function renderNotSubmitted(rows) {
     empty.style.display = 'none';
     tbody.innerHTML = rows.map(row => `
         <tr>
-            <td>${escapeHtml(row.Fullname)}</td>
-            <td>${escapeHtml(row.Academic_Number || '—')}</td>
+            <td>${escapeHtml(row.Personnel_Rank || '—')}</td>
+            <td>
+                <div class="fw-medium">${escapeHtml(row.Fullname)}</div>
+                <small class="text-muted">${escapeHtml(row.Badge_Number || '')}</small>
+            </td>
             <td><small>${escapeHtml(row.batch_names || '—')}</small></td>
             <td><small>${escapeHtml(row.section_names || '—')}</small></td>
         </tr>
@@ -233,7 +419,30 @@ function formatScore(value) {
     return Number.isFinite(num) ? (Number.isInteger(num) ? String(num) : num.toFixed(1)) : '—';
 }
 
+function formatAttemptScoreRatio(score, total) {
+    const value = parseFloat(score);
+    const count = parseInt(total, 10) || 0;
+    if (!Number.isFinite(value)) {
+        return '—';
+    }
+    const shown = Number.isInteger(value) ? String(value) : String(Math.round(value));
+    return count > 0 ? `${shown}/${count}` : shown;
+}
+
+function formatHistoryAverage(score, total) {
+    const value = parseFloat(score);
+    const count = parseInt(total, 10) || 0;
+    if (!Number.isFinite(value) || count <= 0) {
+        return '—';
+    }
+    const ratio = Math.min(1, Math.max(0, value / count));
+    const average = Math.round((ratio * 50 + 50) * 100) / 100;
+    return Number.isInteger(average) ? String(average) : average.toFixed(1);
+}
+
 function switchTab(tab) {
+    activeResponseTab = tab;
+
     document.querySelectorAll('#responseTabs .nav-link').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tab === tab);
     });
@@ -241,6 +450,9 @@ function switchTab(tab) {
     document.getElementById('rankingsPanel').style.display = tab === 'rankings' ? 'block' : 'none';
     document.getElementById('notSubmittedPanel').style.display = tab === 'not-submitted' ? 'block' : 'none';
     document.getElementById('itemAnalysisPanel').style.display = tab === 'item-analysis' ? 'block' : 'none';
+
+    updateResponseFiltersVisibility();
+    updateExportButtonVisibility();
 
     if (tab === 'item-analysis') {
         loadItemAnalysis();
@@ -288,7 +500,6 @@ function renderItemAnalysis(data) {
     const content = document.getElementById('itemAnalysisContent');
     const empty = document.getElementById('itemAnalysisEmpty');
     const notice = document.getElementById('itemAnalysisNotice');
-    const meta = document.getElementById('itemAnalysisMeta');
 
     loading.style.display = 'none';
 
@@ -310,16 +521,14 @@ function renderItemAnalysis(data) {
     if (data.not_submitted_count > 0) {
         notice.style.display = 'block';
         notice.className = 'alert alert-warning py-2 small mb-3';
-        notice.textContent = `${data.not_submitted_count} examinee(s) have not submitted. Analysis is based on ${data.total_examinees} finished submission(s).`;
+        notice.textContent = `${data.not_submitted_count} trainee(s) have not submitted. Analysis is based on ${data.total_examinees} finished submission(s).`;
     } else if (data.all_completed) {
         notice.style.display = 'block';
         notice.className = 'alert alert-info py-2 small mb-3';
-        notice.textContent = `All ${data.assigned_count} assigned examinee(s) have completed the exam.`;
+        notice.textContent = `All ${data.assigned_count} assigned trainee(s) have completed the exam.`;
     } else {
         notice.style.display = 'none';
     }
-
-    meta.textContent = `${data.total_examinees} finished submission(s). Discrimination uses top and bottom 27% groups (${data.group_size} per group).`;
 
     renderItemAnalysisList(getFilteredItemAnalysisItems());
 }
@@ -327,34 +536,20 @@ function renderItemAnalysis(data) {
 function getFilteredItemAnalysisItems() {
     const items = itemAnalysisData?.items || [];
     const query = (document.getElementById('itemAnalysisSearch')?.value || '').trim().toLowerCase();
-    const filter = document.getElementById('itemAnalysisFilter')?.value || 'all';
+
+    if (!query) {
+        return items;
+    }
 
     return items.filter(item => {
-        if (query) {
-            const haystack = [
-                item.question_text,
-                item.correct_answer,
-                item.difficulty_interpretation,
-                item.discrimination_interpretation,
-                `q${item.question_number}`,
-            ].join(' ').toLowerCase();
-            if (!haystack.includes(query)) {
-                return false;
-            }
-        }
-
-        if (filter === 'review') {
-            return parseFloat(item.discrimination_index) < 0;
-        }
-        if (filter === 'poor') {
-            const d = parseFloat(item.discrimination_index);
-            return Number.isFinite(d) && d >= 0 && d < 0.2;
-        }
-        if (filter === 'non-functioning') {
-            return (item.distractors || []).some(d => !d.is_correct && (parseFloat(d.percentage) || 0) === 0);
-        }
-
-        return true;
+        const haystack = [
+            item.question_text,
+            item.correct_answer,
+            item.difficulty_interpretation,
+            item.discrimination_interpretation,
+            `q${item.question_number}`,
+        ].join(' ').toLowerCase();
+        return haystack.includes(query);
     });
 }
 
@@ -436,8 +631,8 @@ function renderItemAnalysisChoiceBars(distractors) {
 }
 
 function formatBarSelectionLabel(count, percentage) {
-    const examineeWord = count === 1 ? 'examinee' : 'examinees';
-    return `Selected by ${count} ${examineeWord} | ${formatPercent(percentage)}`;
+    const traineeWord = count === 1 ? 'trainee' : 'trainees';
+    return `Selected by ${count} ${traineeWord} | ${formatPercent(percentage)}`;
 }
 
 function interpretDistractorLabel(percentage) {
@@ -455,7 +650,7 @@ function renderItemAnalysisCard(item, totalExaminees) {
         <article class="item-analysis-card" id="itemAnalysisQ${item.question_id}">
             <div class="item-analysis-card-header">
                 <span class="item-analysis-qnum-badge">Question ${item.question_number}</span>
-                <p class="item-analysis-question">${escapeHtml(item.question_text)}</p>
+                <p class="item-analysis-question question-stem">${escapeHtml(item.question_text)}</p>
             </div>
             <div class="item-analysis-metrics">
                 <div class="item-analysis-metric">
@@ -517,7 +712,7 @@ function renderInterpretationBadge(label, type) {
 async function viewDetail(resultId) {
     const body = document.getElementById('detailModalBody');
     body.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary"></div></div>';
-    document.getElementById('detailModalTitle').textContent = 'Student Response';
+    document.getElementById('detailModalTitle').textContent = 'Trainee Response';
     document.getElementById('detailModalSub').textContent = '';
     detailModal.show();
 
@@ -533,10 +728,10 @@ async function viewDetail(resultId) {
 }
 
 function renderDetail(data) {
-    const rankLabel = data.Personnel_Rank ? `${data.Personnel_Rank} ` : '';
-    document.getElementById('detailModalTitle').textContent = rankLabel + (data.Fullname || 'Student Response');
-    document.getElementById('detailModalSub').textContent =
-        `${data.remarks || data.status} • ${data.score_display} (${formatScore(data.raw_percent ?? data.Percentage)}% raw) • Grade ${formatGrade(data.grade_percent)}% • ${data.time_taken}`;
+    const badge = data.Badge_Number || '—';
+    const rank = data.Personnel_Rank || '—';
+    document.getElementById('detailModalTitle').textContent = data.Fullname || 'Trainee Response';
+    document.getElementById('detailModalSub').textContent = `${badge} | ${rank}`;
 
     const questionsHtml = (data.questions || []).map((q, index) => {
         const isCorrect = String(q.user_is_correct) === '1';
@@ -561,7 +756,7 @@ function renderDetail(data) {
         return `
             <div class="question-card ${cardClass}">
                 <div class="d-flex justify-content-between align-items-start mb-2">
-                    <strong>Q${index + 1}. ${escapeHtml(q.Question_Text)}</strong>
+                    <strong class="question-stem">Q${index + 1}. ${escapeHtml(q.Question_Text)}</strong>
                     ${badge}
                 </div>
                 ${choicesHtml}
@@ -569,38 +764,56 @@ function renderDetail(data) {
         `;
     }).join('');
 
+    const history = Array.isArray(data.attempt_history) ? data.attempt_history : [];
+    const historyHtml = history.length > 1 ? `
+        <div class="mb-3">
+            <div class="small text-muted mb-1">Retake history</div>
+            ${history.map(attempt => `
+                <div class="d-flex justify-content-between small border-bottom py-1">
+                    <span><strong>Attempt ${attempt.attempt_number}</strong> Score: ${escapeHtml(formatAttemptScoreRatio(attempt.Score, data.total_questions))} Average: ${formatHistoryAverage(attempt.Score, data.total_questions)}%</span>
+                    <span>${formatDateTime(attempt.Submission_Date)}</span>
+                </div>
+            `).join('')}
+        </div>
+    ` : '';
     document.getElementById('detailModalBody').innerHTML = `
         <div class="mb-3 p-3 rounded bg-light">
             <div class="row g-2 small">
                 <div class="col-md-4"><strong>Submitted:</strong> ${formatDateTime(data.Submission_Date)}</div>
-                <div class="col-md-4"><strong>Passing score:</strong> ${formatScore(data.passing_score ?? data.Passing_Score)}%</div>
-                <div class="col-md-4"><strong>Academic No.:</strong> ${escapeHtml(data.Academic_Number || '—')}</div>
+                <div class="col-md-4"><strong>Overall Average:</strong> ${formatGrade(data.grade_percent)}%</div>
+                <div class="col-md-4"><strong>Score:</strong> ${escapeHtml(data.score_display ?? data.Score ?? '—')}</div>
                 <div class="col-md-4"><strong>Batch:</strong> ${escapeHtml(data.batch_names || '—')}</div>
                 <div class="col-md-4"><strong>Section:</strong> ${escapeHtml(data.section_names || '—')}</div>
+                <div class="col-md-4"><strong>Remarks:</strong> ${escapeHtml(data.remarks || data.status || '—')}</div>
             </div>
         </div>
+        ${historyHtml}
         ${questionsHtml || '<p class="text-muted">No questions found.</p>'}
     `;
 }
 
 function exportCsv() {
-    if (!rankingsData.length) return;
+    if (activeResponseTab !== 'rankings' || !rankingsData.length) return;
 
     const headers = [
-        'Personnel Rank', 'Name', 'Batch', 'Section', 'Score', 'Grade (%)', 'Standing', 'Remarks'
+        'Rank', 'Badge No.', 'Name', 'Batch', 'Section',
+        'Score', 'Ave %', 'Standing', 'Remarks', 'Time', 'Submitted'
     ];
-    const lines = [headers.join(',')];
+    const lines = [headers.map(h => csvCell(h)).join(',')];
 
     rankingsData.forEach(row => {
         lines.push([
             csvCell(row.Personnel_Rank),
+            csvCell(row.Badge_Number),
             csvCell(row.Fullname),
             csvCell(row.batch_names),
             csvCell(row.section_names),
-            csvCell(row.score_display ?? row.Score),
-            formatGrade(row.grade_percent),
-            row.standing ?? row.rank,
-            csvCell(row.remarks || row.status)
+            csvCell(formatScoreForExport(row)),
+            csvCell(formatGrade(row.grade_percent)),
+            csvCell(row.standing ?? row.rank),
+            csvCell(row.remarks || row.status),
+            csvCell(row.time_taken || 'N/A'),
+            csvCell(formatDateTime(row.Submission_Date))
         ].join(','));
     });
 
@@ -609,11 +822,39 @@ function exportCsv() {
     const link = document.createElement('a');
     const title = summaryData?.exam?.Title || 'exam';
     link.href = url;
-    link.download = `${sanitizeFilename(title)}-rankings.csv`;
+    link.download = `${sanitizeFilename(title)}-trainee-rankings-${formatLocalDate(new Date())}.csv`;
     link.click();
     URL.revokeObjectURL(url);
 
     axios.post(`${API}?action=log_export&exam_id=${EXAM_ID}`).catch(() => {});
+}
+
+function formatScoreForExport(row) {
+    const display = row.score_display;
+    if (display != null && String(display).includes('/')) {
+        const parts = String(display).split('/');
+        if (parts.length === 2 && parts[0] !== '' && parts[1] !== '') {
+            return excelText(`${parts[0]}/${parts[1]}`);
+        }
+    }
+    const score = row.Score;
+    const total = row.total_items ?? summaryData?.exam?.question_count ?? 0;
+    if (total > 0 && score != null && score !== '') {
+        return excelText(`${score}/${total}`);
+    }
+    return score != null ? String(score) : '';
+}
+
+/** Keep values like 5/5 as text so Excel does not turn them into dates. */
+function excelText(value) {
+    return `="${value}"`;
+}
+
+function formatLocalDate(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
 }
 
 function csvCell(value) {
@@ -639,4 +880,68 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+async function grantRetake(resultId) {
+    if (!CAN_GRANT_RETAKE || retakeInFlight) return;
+
+    const row = rankingsData.find(item => Number(item.Result_ID) === Number(resultId));
+    if (!row) return;
+
+    const result = await Swal.fire({
+        title: 'Allow retake?',
+        html: `Allow retake for <strong>${escapeHtml(row.Fullname)}</strong>? Trainees can take the exam again while it is still open.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonText: 'Allow retake',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#d97706'
+    });
+
+    if (!result.isConfirmed) return;
+
+    retakeInFlight = true;
+    try {
+        const res = await axios.post(`${API}?action=grant_retake&exam_id=${EXAM_ID}&result_id=${encodeURIComponent(resultId)}`);
+        if (!res.data.success) {
+            throw new Error(res.data.message || 'Failed to allow retake');
+        }
+    } catch (err) {
+        Swal.fire(
+            'Unable to allow retake',
+            err.response?.data?.message || err.message || 'Please try again.',
+            'error'
+        );
+        return;
+    } finally {
+        retakeInFlight = false;
+    }
+
+    await Swal.fire({
+        icon: 'success',
+        title: 'Retake allowed',
+        text: `${row.Fullname} can take this exam again.`,
+        timer: 2200,
+        showConfirmButton: false
+    });
+
+    itemAnalysisLoaded = false;
+    itemAnalysisData = null;
+    try {
+        await reloadResponses();
+    } catch (err) {
+        window.location.reload();
+    }
+}
+
+async function reloadResponses() {
+    const summaryRes = await axios.get(`${API}?action=summary&exam_id=${EXAM_ID}`);
+    if (!summaryRes.data.success) {
+        throw new Error(summaryRes.data.message || 'Failed to refresh exam responses');
+    }
+
+    summaryData = summaryRes.data.data;
+    renderSummary(summaryData);
+    await loadAssignmentFilteredData();
+}
+
 window.viewDetail = viewDetail;
+window.grantRetake = grantRetake;

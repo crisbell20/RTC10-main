@@ -14,56 +14,52 @@ require_once __DIR__ . '/../includes/audit-log-utils.php';
 require_once __DIR__ . '/../includes/module-utils.php';
 require_once __DIR__ . '/../includes/archive-utils.php';
 require_once __DIR__ . '/../includes/archive-purge-utils.php';
+require_once __DIR__ . '/../includes/system-settings-utils.php';
+require_once __DIR__ . '/../includes/batch-enrollment-utils.php';
+require_once __DIR__ . '/../includes/user-identity-utils.php';
+require_once __DIR__ . '/../includes/person-name-utils.php';
 
 $request_method = $_SERVER['REQUEST_METHOD'];
-$action = $_GET['action'] ?? ($_POST['action'] ?? '');
+$input = json_decode(file_get_contents('php://input'), true) ?? [];
+$action = $_GET['action'] ?? ($_POST['action'] ?? ($input['action'] ?? ''));
 $userRole = $_SESSION['user_role'] ?? '';
 $hasExamCode = examCodeColumnsExist($pdo);
 $hasResponseReview = responseReviewColumnExists($pdo);
-$retentionDays = ARCHIVE_RETENTION_DAYS;
+$retentionDays = getArchiveRetentionDays($pdo);
 
 function appendExamRetentionMeta(array &$exam, int $retentionDays): void
 {
-    $sessions = (int)($exam['Session_Count'] ?? 0);
-    appendRetentionMeta($exam, $retentionDays, $sessions > 0);
+    appendRetentionMeta($exam, $retentionDays);
 }
 
 function appendUserRetentionMeta(array &$user, int $retentionDays): void
 {
-    $sessions = (int)($user['Session_Count'] ?? 0);
-    appendRetentionMeta($user, $retentionDays, $sessions > 0);
+    appendRetentionMeta($user, $retentionDays);
 }
 
 function appendQuestionRetentionMeta(array &$question, int $retentionDays): void
 {
-    $usage = (int)($question['exam_usage_count'] ?? 0);
-    appendRetentionMeta($question, $retentionDays, $usage > 0);
+    appendRetentionMeta($question, $retentionDays);
 }
 
 function appendBatchRetentionMeta(array &$batch, int $retentionDays): void
 {
-    $activeSections = (int)($batch['active_sections'] ?? 0);
-    $enrollments = (int)($batch['enrollment_count'] ?? 0);
-    appendRetentionMeta($batch, $retentionDays, $activeSections > 0 || $enrollments > 0);
+    appendRetentionMeta($batch, $retentionDays);
 }
 
 function appendSectionRetentionMeta(array &$section, int $retentionDays): void
 {
-    $enrollments = (int)($section['enrollment_count'] ?? 0);
-    appendRetentionMeta($section, $retentionDays, $enrollments > 0);
+    appendRetentionMeta($section, $retentionDays);
 }
 
 function appendModuleRetentionMeta(array &$module, int $retentionDays): void
 {
-    $activeSubjects = (int)($module['active_subjects'] ?? 0);
-    appendRetentionMeta($module, $retentionDays, $activeSubjects > 0);
+    appendRetentionMeta($module, $retentionDays);
 }
 
 function appendSubjectRetentionMeta(array &$subject, int $retentionDays): void
 {
-    $examCount = (int)($subject['exam_count'] ?? 0);
-    $activeQuestions = (int)($subject['active_questions'] ?? 0);
-    appendRetentionMeta($subject, $retentionDays, $examCount > 0 || $activeQuestions > 0);
+    appendRetentionMeta($subject, $retentionDays);
 }
 
 try {
@@ -75,7 +71,7 @@ try {
             'courses' => countArchived($pdo, 'tbl_course'),
             'modules' => moduleTableExists($pdo) ? countArchived($pdo, 'tbl_module') : 0,
             'subjects' => countArchived($pdo, 'tbl_subject'),
-            'batches' => countArchived($pdo, 'tbl_batch'),
+            'batches' => countArchivedParentBatches($pdo),
             'sections' => countArchived($pdo, 'tbl_academic_section'),
             'questions' => countArchived($pdo, 'tbl_question_bank'),
             'users' => countArchived($pdo, 'tbl_user'),
@@ -87,7 +83,7 @@ try {
             'data' => $counts,
             'archive_enabled' => $hasExamCode || archiveColumnExists($pdo, 'tbl_course'),
             'retention_days' => $retentionDays,
-            'retention_years' => 2,
+            'retention_years' => round($retentionDays / 365, 1),
             'eligible_for_purge' => $eligible['total'],
             'eligible_breakdown' => $eligible,
         ]);
@@ -115,13 +111,13 @@ try {
         $sql = "
             SELECT e.Exam_ID, e.User_ID, e.Subject_ID, e.Title, e.Description,
                    e.Schedule_Date, e.Deadline, e.Duration, e.Passing_Score, e.Status,
-                   e.Is_Randomized, e.Time_Limit,
+                   e.Is_Randomized,
                    {$codeColumns}{$reviewColumn}
-                   s.Subject_Name, s.Subject_Code,
+                   s.Subject_Name,
                    {$curriculum['module_select']}
                    {$curriculum['course_id_select']} AS Course_ID,
                    c.Course_Name,
-                   MAX(u.Fullname) AS Created_By,
+                   MAX(" . personNameSql('u') . ") AS Created_By,
                    COUNT(DISTINCT eq.Question_ID) AS Question_Count,
                    COUNT(DISTINCT eb.Batch_ID) AS Batch_Count,
                    COUNT(DISTINCT es.Session_ID) AS Session_Count,
@@ -150,9 +146,9 @@ try {
             $params[] = $subject_id;
         }
         if ($search !== '') {
-            $sql .= ' AND (e.Title LIKE ? OR c.Course_Name LIKE ? OR s.Subject_Name LIKE ? OR s.Subject_Code LIKE ?)';
+            $sql .= ' AND (e.Title LIKE ? OR c.Course_Name LIKE ? OR s.Subject_Name LIKE ?)';
             $like = '%' . $search . '%';
-            $params = array_merge($params, [$like, $like, $like, $like]);
+            $params = array_merge($params, [$like, $like, $like]);
         }
         if ($date_from !== '') {
             $sql .= ' AND DATE(e.Archived_At) >= ?';
@@ -289,7 +285,7 @@ try {
         $date_to = trim($_GET['date_to'] ?? '');
         $curriculum = subjectCurriculumJoin($pdo);
 
-        $sql = "SELECT s.Subject_ID, s.Subject_Name, s.Subject_Code, s.Description, s.Is_Archived, s.Archived_At,
+        $sql = "SELECT s.Subject_ID, s.Subject_Name, s.Description, s.Is_Archived, s.Archived_At,
                        {$curriculum['module_select']}
                        {$curriculum['course_id_select']} AS Course_ID,
                        c.Course_Name,
@@ -309,11 +305,11 @@ try {
         if ($search !== '') {
             $like = '%' . $search . '%';
             if (moduleSchemaEnabled($pdo)) {
-                $sql .= ' AND (s.Subject_Name LIKE ? OR s.Subject_Code LIKE ? OR c.Course_Name LIKE ? OR m.Module_Name LIKE ?)';
-                $params = array_merge($params, [$like, $like, $like, $like]);
-            } else {
-                $sql .= ' AND (s.Subject_Name LIKE ? OR s.Subject_Code LIKE ? OR c.Course_Name LIKE ?)';
+                $sql .= ' AND (s.Subject_Name LIKE ? OR c.Course_Name LIKE ? OR m.Module_Name LIKE ?)';
                 $params = array_merge($params, [$like, $like, $like]);
+            } else {
+                $sql .= ' AND (s.Subject_Name LIKE ? OR c.Course_Name LIKE ?)';
+                $params = array_merge($params, [$like, $like]);
             }
         }
         if ($date_from !== '') {
@@ -361,6 +357,8 @@ try {
             ? '(SELECT COUNT(*) FROM tbl_user_batch ub WHERE ub.Batch_ID = b.Batch_ID) AS enrollment_count'
             : '0 AS enrollment_count';
 
+        $batchVisibility = courseBatchVisibilityCondition('b');
+
         $sql = "SELECT b.Batch_ID, b.Batch_Name, b.Date_Started, b.Date_Ended, b.Is_Archived, b.Archived_At,
                        b.Section_ID, c.Course_ID, c.Course_Name,
                        s.Section_Name,
@@ -371,7 +369,8 @@ try {
                 FROM tbl_batch b
                 INNER JOIN tbl_course c ON b.Course_ID = c.Course_ID
                 LEFT JOIN tbl_academic_section s ON b.Section_ID = s.Section_ID
-                WHERE b.Is_Archived = 1";
+                WHERE b.Is_Archived = 1
+                  AND {$batchVisibility}";
         $params = [];
 
         if ($course_id) {
@@ -512,7 +511,8 @@ try {
         $search = trim($_GET['search'] ?? '');
         $rankCol = personnelRankColumnExists($pdo) ? 'u.Personnel_Rank,' : '';
 
-        $sql = "SELECT u.User_ID, u.Fullname, u.Email, u.Academic_Number, {$rankCol}
+        $nameSql = personNameSql('u');
+        $sql = "SELECT u.User_ID, {$nameSql} AS Fullname, u.Email, u.Badge_Number, {$rankCol}
                        r.Role_Name, u.Status, u.Is_Archived, u.Archived_At,
                        (SELECT COUNT(*) FROM tbl_exam_session es WHERE es.User_ID = u.User_ID) AS Session_Count
                 FROM tbl_user u
@@ -521,17 +521,18 @@ try {
         $params = [];
 
         if ($search !== '') {
-            $sql .= ' AND (u.Fullname LIKE ? OR u.Email LIKE ? OR u.Academic_Number LIKE ?)';
+            $sql .= ' AND (' . $nameSql . ' LIKE ? OR u.Email LIKE ? OR u.Badge_Number LIKE ?)';
             $like = '%' . $search . '%';
             $params = array_merge($params, [$like, $like, $like]);
         }
 
-        $sql .= ' ORDER BY u.Archived_At DESC, u.Fullname ASC';
+        $sql .= ' ORDER BY u.Archived_At DESC, ' . $nameSql . ' ASC';
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         foreach ($users as &$user) {
+            $user['Email'] = displayUserEmail($user['Email'] ?? null);
             appendUserRetentionMeta($user, $retentionDays);
         }
         unset($user);
@@ -566,8 +567,7 @@ try {
             exit;
         }
 
-        $raw = json_decode(file_get_contents('php://input'), true) ?? [];
-        $days = max(ARCHIVE_RETENTION_DAYS_MIN, min(ARCHIVE_RETENTION_DAYS_MAX, (int)($raw['days'] ?? $_POST['days'] ?? $retentionDays)));
+        $days = max(ARCHIVE_RETENTION_DAYS_MIN, min(ARCHIVE_RETENTION_DAYS_MAX, (int)($input['days'] ?? $_POST['days'] ?? $retentionDays)));
 
         $results = purgeAllArchivedRecords($pdo, $days);
         $total = array_sum($results);
@@ -590,6 +590,7 @@ try {
     http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Invalid action']);
 } catch (Exception $e) {
+    error_log('archive.php error: ' . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Server error: ' . $e->getMessage()]);
+    echo json_encode(['success' => false, 'message' => 'An unexpected error occurred. Please try again later.']);
 }

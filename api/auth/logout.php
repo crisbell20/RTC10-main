@@ -1,4 +1,7 @@
 <?php
+
+// Authentication - Logout API
+
 session_start();
 
 require_once __DIR__ . '/../config/connection-pdo.php';
@@ -6,19 +9,14 @@ require_once __DIR__ . '/../includes/audit-log-utils.php';
 
 $logoutUserId = $_SESSION['user_id'] ?? null;
 $logoutRole = $_SESSION['user_role'] ?? null;
-$logoutUsername = auditSessionUsername();
 
 if ($logoutUserId && auditLogTableExists($pdo)) {
-    if ($logoutUsername === '') {
-        $logoutUsername = auditUserLabel($pdo, (int)$logoutUserId);
-    }
-
     writeAuditLog($pdo, [
         'user_id' => (int)$logoutUserId,
         'user_role' => $logoutRole,
         'module' => 'AUTH',
         'action' => 'LOGOUT',
-        'outcome' => $logoutUsername !== '' ? "{$logoutUsername} logged out" : 'User logged out',
+        'outcome' => 'Logged out',
         'status' => 'SUCCESS',
         'entity_type' => 'user',
         'entity_id' => (int)$logoutUserId,

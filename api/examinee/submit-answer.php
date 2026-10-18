@@ -1,13 +1,13 @@
 <?php
-/**
- * Submit Answer API
- * Saves examinee's answer for a question
- */
+
+// Examinee Submit Answer API
+// Saves examinee's answer for a question
 
 header('Content-Type: application/json');
 session_start();
 
 require_once '../config/connection-pdo.php';
+/** @var PDO $pdo */
 require_once '../includes/validation-utils.php';
 
 function sendSuccess($data = []) {
@@ -46,6 +46,19 @@ try {
     if (empty($context['valid'])) {
         sendError($context['message'] ?? 'Invalid session', $context['status'] ?? 400);
     }
+    
+    if ((int)($context['session']['Cheating_Locked'] ?? 0) === 1) {
+    sendError(
+        'This exam is locked due to recorded violations. Please contact the administrator.',
+        403
+    );
+}
+
+    $occupancyToken = normalizeExamOccupancyToken($input['occupancy_token'] ?? '');
+    if ($occupancyToken === '' || !examSessionOccupancyAllows($pdo, $session_id, $occupancyToken)) {
+        sendError(examOccupancyConflictMessage(), 409);
+    }
+    touchExamSessionOccupancy($pdo, $session_id, $occupancyToken);
 
     $examId = (int)$context['session']['Exam_ID'];
 

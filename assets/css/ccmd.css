@@ -1,27 +1,5 @@
-/* CCMD Specific Styles */
+/* CCMD */
 
-/* Sidebar menu label */
-.sidebar-menu .menu-label {
-    display: block;
-    padding: 12px 20px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    color: #9ca3af;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-top: 20px;
-    margin-bottom: 8px;
-    cursor: default;
-    pointer-events: none;
-}
-
-.sidebar-menu .menu-label i {
-    margin-right: 6px;
-    font-size: 0.8rem;
-    opacity: 0.6;
-}
-
-/* Exam Cards */
 .exam-card {
     border: 1px solid #e5e7eb;
     border-radius: 8px;

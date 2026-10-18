@@ -1,4 +1,7 @@
 <?php
+
+// Courses API
+
 header('Content-Type: application/json');
 session_start();
 
@@ -139,16 +142,6 @@ try {
                 INNER JOIN tbl_batch b ON ub.Batch_ID = b.Batch_ID
                 WHERE b.Section_ID = ?
             ');
-
-            $examineesStmt = $pdo->prepare('
-                SELECT DISTINCT u.User_ID, u.Fullname, u.Email, u.Academic_Number,
-                       ub.Status, ub.Date_Enrolled, ub.Batch_ID
-                FROM tbl_user_batch ub
-                INNER JOIN tbl_batch b ON ub.Batch_ID = b.Batch_ID
-                INNER JOIN tbl_user u ON ub.User_ID = u.User_ID
-                WHERE b.Section_ID = ?
-                ORDER BY u.Fullname
-            ');
         }
 
         foreach ($courses as &$course) {
@@ -182,13 +175,10 @@ try {
                     if ($hasUserBatch) {
                         $assignedCountStmt->execute([$section['Section_ID']]);
                         $section['assigned_count'] = (int)($assignedCountStmt->fetch(PDO::FETCH_ASSOC)['assigned_count'] ?? 0);
-
-                        $examineesStmt->execute([$section['Section_ID']]);
-                        $section['examinees'] = $examineesStmt->fetchAll(PDO::FETCH_ASSOC);
                     } else {
                         $section['assigned_count'] = 0;
-                        $section['examinees'] = [];
                     }
+                    $section['examinees'] = [];
 
                     $section['available_slots'] = max(0, (int)$section['Capacity'] - $section['assigned_count']);
                 }
@@ -211,7 +201,6 @@ try {
     if ($request_method === 'POST' && $action === 'add') {
         $course_name = $input['course_name'] ?? $_POST['course_name'] ?? '';
         $details = $input['details'] ?? $_POST['details'] ?? '';
-        $duration = $input['duration'] ?? $_POST['duration'] ?? '';
         $user_id = $_SESSION['user_id'];
 
         if (empty($course_name)) {
@@ -232,8 +221,8 @@ try {
             exit;
         }
 
-        $stmt = $pdo->prepare('INSERT INTO tbl_course (User_ID, Course_Name, Details, Duration) VALUES (?, ?, ?, ?)');
-        $stmt->execute([$user_id, $course_name, $details, $duration]);
+        $stmt = $pdo->prepare('INSERT INTO tbl_course (User_ID, Course_Name, Details, Duration) VALUES (?, ?, ?, NULL)');
+        $stmt->execute([$user_id, $course_name, $details]);
 
         $courseId = (int)$pdo->lastInsertId();
         auditFromSession($pdo, 'COURSE', 'CREATE_COURSE', "Course {$course_name} created", 'SUCCESS', 'course', $courseId);
@@ -252,7 +241,6 @@ try {
         $course_id = $input['course_id'] ?? $_POST['course_id'] ?? '';
         $course_name = $input['course_name'] ?? $_POST['course_name'] ?? '';
         $details = $input['details'] ?? $_POST['details'] ?? '';
-        $duration = $input['duration'] ?? $_POST['duration'] ?? '';
 
         if (empty($course_id) || empty($course_name)) {
             http_response_code(400);
@@ -272,8 +260,8 @@ try {
             exit;
         }
 
-        $stmt = $pdo->prepare('UPDATE tbl_course SET Course_Name = ?, Details = ?, Duration = ? WHERE Course_ID = ?');
-        $stmt->execute([$course_name, $details, $duration, $course_id]);
+        $stmt = $pdo->prepare('UPDATE tbl_course SET Course_Name = ?, Details = ? WHERE Course_ID = ?');
+        $stmt->execute([$course_name, $details, $course_id]);
 
         auditFromSession($pdo, 'COURSE', 'UPDATE_COURSE', "Course {$course_name} updated", 'SUCCESS', 'course', (int)$course_id);
 
@@ -295,6 +283,16 @@ try {
             exit;
         }
 
+        $activeSessions = countActiveExamSessionsForCourse($pdo, $course_id);
+        if ($activeSessions > 0) {
+            http_response_code(409);
+            echo json_encode([
+                'success' => false,
+                'message' => "Cannot archive course while {$activeSessions} trainee session(s) are still in progress. Wait for exams to finish or finalize them first.",
+            ]);
+            exit;
+        }
+
         $result = archiveCourseWithDescendants($pdo, $course_id);
         if (!$result['course']) {
             http_response_code(400);
@@ -303,7 +301,14 @@ try {
         }
 
         $courseLabel = auditCourseLabel($pdo, $course_id);
-        auditFromSession($pdo, 'COURSE', 'ARCHIVE_COURSE', "Course {$courseLabel} archived", 'SUCCESS', 'course', $course_id);
+        $detail = "Course {$courseLabel} archived";
+        if (!empty($result['exams'])) {
+            $detail .= "; {$result['exams']} exam(s)";
+        }
+        if (!empty($result['enrollments'])) {
+            $detail .= "; {$result['enrollments']} assignment(s) deactivated";
+        }
+        auditFromSession($pdo, 'COURSE', 'ARCHIVE_COURSE', $detail, 'SUCCESS', 'course', $course_id);
 
         http_response_code(200);
         echo json_encode([
@@ -314,7 +319,7 @@ try {
         exit;
     }
 
-    // Restore archived course
+    // Restore archived course (full cascade)
     if ($request_method === 'POST' && $action === 'restore') {
         $course_id = (int)($input['course_id'] ?? $_POST['course_id'] ?? 0);
 
@@ -324,19 +329,28 @@ try {
             exit;
         }
 
-        if (!restoreRecord($pdo, 'tbl_course', 'Course_ID', $course_id)) {
+        $result = restoreCourseWithDescendants($pdo, $course_id);
+        if (!$result['course']) {
             http_response_code(400);
             echo json_encode(['success' => false, 'message' => restoreFailureMessage($pdo, 'tbl_course', 'Course_ID', $course_id, 'course')]);
             exit;
         }
 
         $courseLabel = auditCourseLabel($pdo, $course_id);
-        auditFromSession($pdo, 'COURSE', 'RESTORE_COURSE', "Course {$courseLabel} restored", 'SUCCESS', 'course', $course_id);
+        $detail = "Course {$courseLabel} restored";
+        if (!empty($result['exams'])) {
+            $detail .= "; {$result['exams']} exam(s)";
+        }
+        if (!empty($result['enrollments'])) {
+            $detail .= "; {$result['enrollments']} assignment(s) reactivated";
+        }
+        auditFromSession($pdo, 'COURSE', 'RESTORE_COURSE', $detail, 'SUCCESS', 'course', $course_id);
 
         http_response_code(200);
         echo json_encode([
             'success' => true,
-            'message' => 'Course restored successfully. Batches, sections, modules, and subjects remain archived until restored individually from Archive.',
+            'message' => formatCascadeRestoreMessage('course', $result),
+            'cascade' => $result,
         ]);
         exit;
     }
@@ -354,10 +368,11 @@ try {
     ]);
 
 } catch (Exception $e) {
+    error_log('courses.php error: ' . $e->getMessage());
     http_response_code(500);
     echo json_encode([
         'success' => false,
-        'message' => 'Error: ' . $e->getMessage()
+        'message' => 'An unexpected error occurred. Please try again later.'
     ]);
 }
 ?>

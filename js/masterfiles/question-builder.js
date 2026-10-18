@@ -1,6 +1,5 @@
-/**
- * Reusable Google Forms-style question canvas builder (bank-only / draft mode).
- */
+// Question builder
+
 (function(global) {
     const CHOICE_COUNT = 5;
     let canvas = [];
